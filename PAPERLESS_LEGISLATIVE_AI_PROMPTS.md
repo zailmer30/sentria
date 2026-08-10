@@ -14,14 +14,46 @@
 These are steps **you** perform, not the coding agent.
 
 1. **Install the frontend skills into the project** so the agent can
-   load them:
-   - Cursor: place the skill folders in `.cursor/skills/impeccable/`
-     and `.cursor/skills/ui-ux-pro-max/`
-   - Claude Code: place them in `.claude/skills/impeccable/` and
-     `.claude/skills/ui-ux-pro-max/`
+   load them. All three have official installers — run these from the
+   project root:
 
-   Each skill folder must contain its `SKILL.md`. Verify the agent can
-   see the skills before starting (ask it to list available skills).
+   ``` bash
+   # Impeccable (design guardrails + audit/polish commands)
+   npx impeccable install          # then run /impeccable init inside your AI tool
+
+   # UI UX Pro Max (UI styles, palettes, font pairings, UX rules)
+   npm install -g ui-ux-pro-max-cli
+   uipro init --ai cursor          # or --ai claude for Claude Code
+
+   # Refero (research-first design methodology, real product references)
+   npx skills add https://github.com/referodesign/refero_skill --skill refero-design
+   ```
+
+   The installers write into `.cursor/skills/` (Cursor) or
+   `.claude/skills/` (Claude Code): `impeccable/`, `ui-ux-pro-max/`,
+   and `refero-design/`. Each skill folder must contain its `SKILL.md`.
+   Verify the agent can see the skills before starting (ask it to list
+   available skills), and commit the skill folders to git so cloud
+   agents get them too.
+
+   **Optional but recommended — Refero MCP** for live design research
+   against 150,000+ real product screens and user flows (requires a
+   Refero Pro subscription; the skill still works without it). For
+   Cursor, add to `.cursor/mcp.json`:
+
+   ``` json
+   {
+     "mcpServers": {
+       "refero": {
+         "url": "https://api.refero.design/mcp",
+         "headers": { "Authorization": "Bearer <token>" }
+       }
+     }
+   }
+   ```
+
+   For Claude Code:
+   `claude mcp add --transport http refero https://api.refero.design/mcp --header "Authorization: Bearer <token>"`
 
 2. **Prepare the environment:** PHP 8.4, Composer, Node 22 LTS,
    PostgreSQL 17 with the `pgvector` extension available, and Redis.
@@ -197,7 +229,11 @@ Implement authentication, authorization, RBAC, CSRF protection, validation, rate
 Never expose AI/API keys in frontend code.
 
 UI/UX:
-Before writing any frontend code, read and follow the "impeccable" and "ui-ux-pro-max" skills installed in this project (.cursor/skills/ or .claude/skills/). Apply them to every page, component, and layout you create.
+Before writing any frontend code, read and follow the design skills installed in this project (.cursor/skills/ or .claude/skills/), in this order:
+1. "refero-design" — research first: ground the visual direction in real product references (government portals, document-heavy tools, dashboards) before implementing anything. If Refero MCP is available, use it for style/screen/flow research; record the chosen references and stick to them.
+2. "impeccable" and "ui-ux-pro-max" — apply during implementation for design-system discipline, typography, color, spacing, and anti-pattern avoidance.
+
+Apply them to every page, component, and layout you create.
 
 Design requirements:
 - Define a design system first: color tokens, typography scale, spacing scale, elevation, and component variants. Reuse it everywhere; no ad-hoc styles.
@@ -274,7 +310,7 @@ Continue using this same project in future prompts. Do not recreate it from scra
 ``` text
 CONTINUE BUILDING THE SAME PROJECT. Do NOT restart it.
 
-Before writing any frontend code in this part, re-read and apply the "impeccable" and "ui-ux-pro-max" skills. The Paperless Session Mode is the most important UI in the system: tablet-first, large touch targets, distraction-free reading layout.
+Before writing any frontend code in this part, re-read and apply the "refero-design", "impeccable", and "ui-ux-pro-max" skills — research references for session/agenda/reading interfaces first (refero-design), then implement with the other two. The Paperless Session Mode is the most important UI in the system: tablet-first, large touch targets, distraction-free reading layout.
 
 Implement the complete Legislative Management and Paperless Session modules.
 
@@ -813,7 +849,7 @@ Continue using the existing project. Do not rebuild from scratch.
 ``` text
 CONTINUE BUILDING THE SAME PROJECT.
 
-Before writing any frontend code in this part, re-read and apply the "impeccable" and "ui-ux-pro-max" skills. Session-floor surfaces are tablet-first.
+Before writing any frontend code in this part, re-read and apply the "refero-design", "impeccable", and "ui-ux-pro-max" skills — research references for live-transcript and assistant-panel interfaces first (refero-design), then implement with the other two. Session-floor surfaces are tablet-first.
 
 Implement the AI-powered Session Assistant.
 
@@ -1001,7 +1037,7 @@ Continue using the existing project. Do not rebuild from scratch.
 ``` text
 CONTINUE BUILDING THE SAME PROJECT.
 
-Before writing any frontend code in this part, re-read and apply the "impeccable" and "ui-ux-pro-max" skills. The public portal is the public face of the institution: it must be fast, accessible (WCAG 2.1 AA), and readable on any device.
+Before writing any frontend code in this part, re-read and apply the "refero-design", "impeccable", and "ui-ux-pro-max" skills — research references for public government portals and legislative search sites first (refero-design), then implement with the other two. The public portal is the public face of the institution: it must be fast, accessible (WCAG 2.1 AA), and readable on any device.
 
 Prepare the system for production deployment as a secure government legislative information system.
 
