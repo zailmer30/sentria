@@ -55,8 +55,9 @@ These are steps **you** perform, not the coding agent.
    For Claude Code:
    `claude mcp add --transport http refero https://api.refero.design/mcp --header "Authorization: Bearer <token>"`
 
-2. **Prepare the environment:** PHP 8.4, Composer, Node 22 LTS,
-   PostgreSQL 17 with the `pgvector` extension available, and Redis.
+2. **Prepare the environment:** PHP 8.4 (Laravel 13 requires PHP 8.3+),
+   Composer, Node 22 LTS, PostgreSQL 17 with the `pgvector` extension
+   available, and Redis.
 
 3. **Create an empty git repository** and commit after every part so
    each stage is reviewable and revertible.
@@ -79,7 +80,7 @@ IMPORTANT:
 - Use fictional/demo data during development.
 
 TECHNOLOGY (pinned — do not substitute):
-Backend: Laravel 12 on PHP 8.4
+Backend: Laravel 13 (latest stable — verify with `composer show laravel/framework --all` and use the newest stable release) on PHP 8.4 (Laravel 13 requires PHP 8.3+)
 Frontend: React 19 + TypeScript (strict mode) via Inertia.js v2, with SSR enabled (required later for the public portal)
 Build tool: Vite
 Styling/components: Tailwind CSS v4 + shadcn/ui
@@ -1292,6 +1293,7 @@ Production
 
 Document:
 Server requirements
+Laravel 13 (record the exact patch version the project is running)
 PHP 8.4
 Node 22 LTS
 PostgreSQL 17 (+ pgvector)
