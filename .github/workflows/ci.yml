@@ -1,0 +1,101 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master, '**']
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  quality:
+    name: Quality
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: pgvector/pgvector:pg17
+        env:
+          POSTGRES_DB: sentria_testing
+          POSTGRES_USER: sentria
+          POSTGRES_PASSWORD: sentria
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U sentria -d sentria_testing"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.4'
+          extensions: mbstring, pdo_pgsql, pgsql, redis, bcmath, intl, gd, zip
+          coverage: none
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Install Composer dependencies
+        run: composer install --no-interaction --prefer-dist --optimize-autoloader
+
+      - name: Install NPM dependencies
+        run: npm ci
+
+      - name: Pint
+        run: vendor/bin/pint --test
+
+      - name: Larastan
+        run: vendor/bin/phpstan analyse --memory-limit=2G
+
+      - name: ESLint
+        run: npm run lint
+
+      - name: Prettier
+        run: npm run format:check
+
+      - name: TypeScript
+        run: npm run types
+
+      - name: Enable pgvector
+        env:
+          PGPASSWORD: sentria
+        run: psql -h 127.0.0.1 -U sentria -d sentria_testing -c "CREATE EXTENSION IF NOT EXISTS vector;"
+
+      - name: Pest
+        env:
+          APP_KEY: base64:2fl+KtvkdphvQyEfmlH/M7C9m/nX6qY0nYlQn1o0p0E=
+          APP_ENV: testing
+          DB_CONNECTION: pgsql
+          DB_HOST: 127.0.0.1
+          DB_PORT: 5432
+          DB_DATABASE: sentria_testing
+          DB_USERNAME: sentria
+          DB_PASSWORD: sentria
+          CACHE_STORE: array
+          QUEUE_CONNECTION: sync
+          SESSION_DRIVER: array
+          BROADCAST_CONNECTION: null
+        run: php artisan test --compact
+
+      - name: Frontend build
+        run: npm run build

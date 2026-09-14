@@ -1,0 +1,13 @@
+includes:
+    - vendor/larastan/larastan/extension.neon
+
+parameters:
+    paths:
+        - app
+        - config
+        - database/seeders
+        - routes
+    level: 8
+    treatPhpDocTypesAsCertain: false
+    excludePaths:
+        - app/Actions/Fortify/CreateNewUser.php

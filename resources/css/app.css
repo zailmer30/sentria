@@ -1,0 +1,875 @@
+@import 'tailwindcss';
+@plugin 'tailwindcss-animate';
+
+@source '../../vendor/laravel/framework/src/Illuminate/Pagination/resources/views/*.blade.php';
+@source '../../storage/framework/views/*.php';
+@source '../**/*.{js,ts,tsx,blade.php}';
+
+/*
+ |--------------------------------------------------------------------------
+ | Sentria — "Order of Business"
+ |--------------------------------------------------------------------------
+ | The legislative record as a precision instrument. The whole interface is
+ | graphite, white and hairlines; the only two saturated colours in the system
+ | are the two colours of the flag, and each has exactly one job:
+ |
+ |   accent (national blue #0038A8) — this is where you act
+ |   live   (national red  #CE1126) — this is happening now
+ |
+ | Everything else earns its place through type, alignment, density and state.
+ | Never write a raw colour or a raw px value in a component. If a value is
+ | missing here, add it here.
+ |
+ | Two vocabularies, one set of values. The Sentria names (canvas, ink, line,
+ | accent) are the authored language of this product. The shadcn names
+ | (background, foreground, border, primary) are declared as references to
+ | them so upstream components drop in unmodified and follow dark mode for
+ | free. Overriding a Sentria token in `.dark` moves both.
+ */
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+@theme {
+    /* ---- Faces --------------------------------------------------------
+       Space Grotesk carries the entire product: headings, labels, body, data,
+       hashes, ULIDs, reference numbers, clocks, and tallies. */
+    --font-sans: 'Space Grotesk', ui-sans-serif, system-ui, -apple-system, sans-serif;
+    --font-display: 'Space Grotesk', ui-sans-serif, system-ui, sans-serif;
+    --font-mono: 'Space Grotesk', ui-sans-serif, system-ui, sans-serif;
+
+    /* ---- Ground and surfaces (light: the secretariat's desk) -----------
+       `shell` is the recessed frame the application sheet floats on; it is the
+       only tone that ever touches the edge of the viewport. `canvas` is the
+       ground inside the sheet, `surface` is a card standing on it. */
+    --color-shell: #e6eaee;
+    --color-canvas: #f2f5f8;
+    --color-canvas-sunk: #e9eef3;
+    --color-surface: #ffffff;
+    --color-surface-alt: #f7f9fb;
+    --color-surface-raised: #ffffff;
+
+    /* ---- Ink ----------------------------------------------------------- */
+    --color-ink: #0f1419;
+    --color-ink-muted: #4a5561;
+    --color-ink-subtle: #667281;
+    --color-ink-faint: #8b95a3;
+    --color-ink-inverse: #ffffff;
+
+    /* ---- Lines ---------------------------------------------------------
+       `line` separates, `line-strong` divides, `line-control` bounds an
+       interactive control and therefore clears 3:1 against its surface. */
+    --color-line: #e3e7ec;
+    --color-line-strong: #cdd4dc;
+    --color-line-control: #8792a1;
+
+    /* ---- Accent: where you act ----------------------------------------- */
+    --color-accent: #0038a8;
+    --color-accent-hover: #002d8a;
+    --color-accent-ink: #0b3f9e;
+    --color-accent-soft: #e8eefb;
+    --color-accent-line: #b3c6ea;
+    --color-accent-on: #ffffff;
+
+    /* ---- Live: what is happening now ------------------------------------
+       In session, voting open, quorum not met, connection lost. Nothing
+       decorative may claim this colour. */
+    --color-live: #ce1126;
+    --color-live-hover: #ad0e20;
+    --color-live-ink: #a8121f;
+    --color-live-soft: #fdeaec;
+    --color-live-line: #f0b9c0;
+    --color-live-on: #ffffff;
+
+    /* ---- Floor plate ----------------------------------------------------
+       `bg-floor-plate` is the same deep navy in both themes — the chamber is
+       dim in either case — so its foreground must not flip with the theme the
+       way `ink` and `accent-on` do. These are the only tones allowed on it. */
+    --color-floor-plate: rgb(19, 32, 66);
+    --color-floor-ink: #ffffff;
+    --color-floor-ink-muted: #b4c2d8;
+    --color-floor-ink-faint: #8494b0;
+    --color-floor-line: rgb(255 255 255 / 0.14);
+    --color-floor-sunk: rgb(255 255 255 / 0.06);
+
+    /* ---- Semantic states ------------------------------------------------ */
+    --color-success: #16a34a;
+    --color-success-soft: #e6f4ec;
+    --color-success-line: #a8d6bd;
+
+    --color-warning: #8a5a00;
+    --color-warning-soft: #fbf1de;
+    --color-warning-line: #e0c489;
+
+    --color-critical: #a8181f;
+    --color-critical-soft: #fceceb;
+    --color-critical-line: #ecb5b2;
+    --color-critical-on: #ffffff;
+
+    /* Ballot category: inhibit is a fourth category, not a status tone. */
+    --color-vote-inhibit: #5c5a8f;
+    --color-vote-inhibit-soft: #eeedf5;
+    --color-vote-inhibit-line: #c5c3db;
+
+    --color-info: #1d5b8f;
+    --color-info-soft: #e8f1f8;
+    --color-info-line: #aecbe2;
+
+    /* ---- Portal ("Navy Trust") ----------------------------------------
+       Public records only. Staff chrome stays graphite + flag colours;
+       these tokens are consumed by the portal shell and its utilities. */
+    --color-brand: #3b6fa0;
+    --color-brand-foreground: #f7f8fb;
+    --shadow-plate: 0 1px 2px rgb(15 27 61 / 0.06), 0 8px 24px -12px rgb(15 27 61 / 0.18);
+    --shadow-lift: 0 2px 4px rgb(15 27 61 / 0.06), 0 18px 40px -18px rgb(15 27 61 / 0.32);
+
+    /* ---- Scrims (ink at opacity; same base as elevation shadows) -------- */
+    --color-scrim: rgb(15 20 25 / 0.55);
+    --color-scrim-strong: rgb(15 20 25 / 0.6);
+
+    /* ---- Machine output: visibly not the record -------------------------
+       AI is separated by material, not by a fifth brand hue: a cooler surface
+       carrying a faint hatch, plus a permanent label. */
+    --color-machine-surface: #f1f4f8;
+    --color-machine-line: #c3cddb;
+    --color-machine-ink: #3d566f;
+
+    /* ---- Focus ---------------------------------------------------------- */
+    --color-focus: #0038a8;
+    --color-focus-halo: #ffffff;
+
+    /* ---- Data series -----------------------------------------------------
+       Charts state quantity, not brand. The ramp opens on the accent because
+       the first series is almost always the thing the page is about, then
+       walks away from it through the semantic hues into neutral. Never used
+       for state: a red bar here is a category, not an alarm. */
+    --color-chart-1: #0038a8;
+    --color-chart-2: #3d7fc1;
+    --color-chart-3: #0f7a45;
+    --color-chart-4: #c08a1e;
+    --color-chart-5: #94a1b0;
+    --color-chart-grid: #e3e7ec;
+    --color-chart-track: #eceff3;
+
+    /* ---- shadcn vocabulary ----------------------------------------------
+       References, not values. `accent` is deliberately NOT mapped to the
+       national blue: upstream components use `bg-accent` for hover tints, and
+       in this product exactly one thing on a surface may be blue. */
+    --color-background: var(--color-canvas);
+    --color-foreground: var(--color-ink);
+    --color-card: var(--color-surface);
+    --color-card-foreground: var(--color-ink);
+    --color-popover: var(--color-surface-raised);
+    --color-popover-foreground: var(--color-ink);
+    --color-primary: var(--color-accent);
+    --color-primary-foreground: var(--color-accent-on);
+    --color-secondary: var(--color-canvas-sunk);
+    --color-secondary-foreground: var(--color-ink);
+    --color-muted: var(--color-canvas-sunk);
+    --color-muted-foreground: var(--color-ink-muted);
+    --color-destructive: var(--color-critical);
+    --color-destructive-foreground: var(--color-critical-on);
+    --color-border: var(--color-line);
+    --color-input: var(--color-line-control);
+    --color-ring: var(--color-focus);
+
+    --color-sidebar: var(--color-surface);
+    --color-sidebar-foreground: var(--color-ink-muted);
+    --color-sidebar-primary: var(--color-accent);
+    --color-sidebar-primary-foreground: var(--color-accent-on);
+    --color-sidebar-accent: var(--color-canvas-sunk);
+    --color-sidebar-accent-foreground: var(--color-ink);
+    --color-sidebar-border: var(--color-line);
+    --color-sidebar-ring: var(--color-focus);
+
+    /* ---- Geometry -------------------------------------------------------
+       Softer than the first cut of this system: cards read as objects you
+       could pick up rather than cells in a spreadsheet. The chip is still the
+       only pill, and the register cell is still the only square thing. */
+    --radius-xs: 4px;
+    --radius-sm: 6px;
+    --radius-md: 10px;
+    --radius-lg: 14px;
+    --radius-xl: 20px;
+    --radius-2xl: 24px;
+
+    /* ---- Elevation -------------------------------------------------------
+       Wide and faint. Depth separates a surface from its ground; it is never
+       the reason you notice something. */
+    --shadow-xs: 0 1px 2px rgb(15 20 25 / 0.04);
+    --shadow-sm: 0 1px 2px rgb(15 20 25 / 0.04), 0 2px 8px -2px rgb(15 20 25 / 0.06);
+    --shadow-md: 0 2px 4px -1px rgb(15 20 25 / 0.05), 0 8px 24px -6px rgb(15 20 25 / 0.09);
+    --shadow-lg: 0 4px 8px -2px rgb(15 20 25 / 0.06), 0 24px 48px -12px rgb(15 20 25 / 0.14);
+    /* The application sheet: one shadow, cast once, at the outermost frame. */
+    --shadow-sheet: 0 1px 3px rgb(15 20 25 / 0.05), 0 16px 40px -16px rgb(15 20 25 / 0.14);
+
+    /* ---- Spacing: 4px rhythm -------------------------------------------- */
+    --spacing: 0.25rem;
+    --spacing-gutter: 1.25rem;
+    --spacing-section: 2rem;
+
+    /* ---- Type ramp: fixed rem, ~1.15 ratio ------------------------------
+       Relaxed one notch from the original 13px setting. The register earns its
+       density back through row height and alignment, not through small type. */
+    --text-2xs: 0.6875rem;
+    --text-2xs--line-height: 1rem;
+    --text-2xs--letter-spacing: 0.02em;
+    --text-xs: 0.75rem;
+    --text-xs--line-height: 1.125rem;
+    --text-sm: 0.875rem;
+    --text-sm--line-height: 1.3125rem;
+    --text-base: 0.9375rem;
+    --text-base--line-height: 1.4375rem;
+    --text-md: 1rem;
+    --text-md--line-height: 1.5rem;
+    --text-lg: 1.125rem;
+    --text-lg--line-height: 1.625rem;
+    --text-xl: 1.4375rem;
+    --text-xl--line-height: 1.8125rem;
+    --text-2xl: 1.875rem;
+    --text-2xl--line-height: 2.25rem;
+    --text-3xl: 2.5rem;
+    --text-3xl--line-height: 2.75rem;
+
+    /* Counted facts: tallies, quorum, the running clock, the headline number
+       on a dashboard card. Tight leading, always tabular. */
+    --text-figure-sm: 1.5rem;
+    --text-figure-sm--line-height: 1;
+    --text-figure: 2.25rem;
+    --text-figure--line-height: 1;
+    --text-figure-lg: 3rem;
+    --text-figure-lg--line-height: 1;
+    --text-figure-xl: 4rem;
+    --text-figure-xl--line-height: 1;
+
+    /* ---- Motion --------------------------------------------------------- */
+    --ease-out-quint: cubic-bezier(0.22, 1, 0.36, 1);
+    --ease-standard: cubic-bezier(0.2, 0, 0, 1);
+    --duration-fast: 120ms;
+    --duration-base: 180ms;
+    --duration-slow: 260ms;
+}
+
+/* shadcn components that reference the bare `--radius` (rather than a named
+   step) resolve to the card radius. */
+:root {
+    --radius: 0.875rem;
+}
+
+/*
+ | Dark: the chamber, not an inversion of the office. The room is dim, the
+ | tablets are the brightest thing in it, and the two flag colours have to
+ | survive on a dark ground, so both are lifted rather than reused. Only the
+ | Sentria names are restated here; every shadcn alias follows automatically.
+ */
+.dark {
+    --color-shell: #06080a;
+    --color-canvas: #0e1216;
+    --color-canvas-sunk: #090c0f;
+    --color-surface: #161c22;
+    --color-surface-alt: #1b222a;
+    --color-surface-raised: #202830;
+
+    --color-ink: #e8ecf1;
+    --color-ink-muted: #a4b0be;
+    --color-ink-subtle: #8593a2;
+    --color-ink-faint: #6b7887;
+    --color-ink-inverse: #0b0e11;
+
+    --color-line: #262e37;
+    --color-line-strong: #353f4a;
+    --color-line-control: #5c6875;
+
+    --color-accent: #4d7cff;
+    --color-accent-hover: #6b91ff;
+    --color-accent-ink: #8fadff;
+    --color-accent-soft: #131d33;
+    --color-accent-line: #2b3f68;
+    --color-accent-on: #05122e;
+
+    --color-live: #ff5a63;
+    --color-live-hover: #ff7880;
+    --color-live-ink: #ff8f95;
+    --color-live-soft: #2a1215;
+    --color-live-line: #5c2429;
+    --color-live-on: #2a0508;
+
+    --color-success: #3ecf8e;
+    --color-success-soft: #0d2119;
+    --color-success-line: #1f5340;
+
+    --color-warning: #e0b341;
+    --color-warning-soft: #241d0c;
+    --color-warning-line: #5b4718;
+
+    --color-critical: #ff6b6b;
+    --color-critical-soft: #2b1315;
+    --color-critical-line: #5e2628;
+    --color-critical-on: #2a0508;
+
+    --color-vote-inhibit: #a8a6d4;
+    --color-vote-inhibit-soft: #1c1b2e;
+    --color-vote-inhibit-line: #3d3b5c;
+
+    --color-info: #7cb2e0;
+    --color-info-soft: #101f2b;
+    --color-info-line: #274155;
+
+    --color-scrim: rgb(3 5 7 / 0.7);
+    --color-scrim-strong: rgb(3 5 7 / 0.78);
+
+    --color-machine-surface: #161c23;
+    --color-machine-line: #35465a;
+    --color-machine-ink: #9db4cc;
+
+    --color-focus: #7ba0ff;
+    --color-focus-halo: #0b0e11;
+
+    --color-brand: #7cb2e0;
+    --color-brand-foreground: #05122e;
+
+    --color-chart-1: #4d7cff;
+    --color-chart-2: #7cb2e0;
+    --color-chart-3: #3ecf8e;
+    --color-chart-4: #e0b341;
+    --color-chart-5: #7d8b9b;
+    --color-chart-grid: #262e37;
+    --color-chart-track: #1b222a;
+
+    --shadow-xs: 0 1px 2px rgb(3 5 7 / 0.5);
+    --shadow-sm: 0 1px 2px rgb(3 5 7 / 0.5), 0 2px 8px -2px rgb(3 5 7 / 0.6);
+    --shadow-md: 0 2px 4px -1px rgb(3 5 7 / 0.55), 0 8px 24px -6px rgb(3 5 7 / 0.65);
+    --shadow-lg: 0 4px 8px -2px rgb(3 5 7 / 0.6), 0 24px 48px -12px rgb(3 5 7 / 0.75);
+    --shadow-sheet: 0 1px 3px rgb(3 5 7 / 0.6), 0 16px 40px -16px rgb(3 5 7 / 0.7);
+}
+
+/*
+ | Public portal — "Navy Trust". Scoped so the staff shell keeps graphite and
+ | the flag colours. The portal is a citizen reading room: navy plates, paper
+ | cards, steel-blue accents.
+ */
+.portal-shell {
+    --color-shell: #f2f4f8;
+    --color-canvas: #f8f9fb;
+    --color-canvas-sunk: #e4ecf4;
+    --color-surface: #ffffff;
+    --color-surface-alt: #f2f4f8;
+    --color-surface-raised: #ffffff;
+    --color-ink: #0f1b3d;
+    --color-ink-muted: #5b6776;
+    --color-ink-subtle: #5b6776;
+    --color-ink-faint: #8b95a3;
+    --color-ink-inverse: #f7f8fb;
+    --color-line: #e6e9f0;
+    --color-line-strong: #d5dae4;
+    --color-line-control: #c5ccd8;
+    --color-accent: #0f1b3d;
+    --color-accent-hover: #1e3a5f;
+    --color-accent-ink: #3b6fa0;
+    --color-accent-soft: #e4ecf4;
+    --color-accent-line: #b7c9dc;
+    --color-accent-on: #f7f8fb;
+    --color-brand: #3b6fa0;
+    --color-brand-foreground: #f7f8fb;
+    --color-focus: #3b6fa0;
+    --color-focus-halo: #ffffff;
+    --radius: 0.5rem;
+    --radius-xs: 0.25rem;
+    --radius-sm: 0.375rem;
+    --radius-md: 0.5rem;
+    --radius-lg: 0.5rem;
+    background-color: var(--color-canvas);
+    color: var(--color-ink);
+    font-family: var(--font-sans);
+}
+
+.portal-shell h1,
+.portal-shell h2,
+.portal-shell h3,
+.portal-shell h4 {
+    font-family: var(--font-sans);
+    letter-spacing: -0.02em;
+}
+
+/*
+ | Staff sign-in — a split plate, not the graphite shell. Navy on the left,
+ | paper on the right. These values are page-local so the flag colours and the
+ | dark-theme inversion never leak onto this surface.
+ */
+.login-shell {
+    --login-navy: #0f172a;
+    --login-navy-hover: #020617;
+    --login-brand-from: #0a1220;
+    --login-brand-to: #152238;
+    --login-white: #ffffff;
+    --login-muted: #94a3b8;
+    --login-faint: #64748b;
+    --login-body: #475569;
+    --login-hairline: #e2e8f0;
+    --login-badge: #eef2f7;
+    --login-badge-ink: #334155;
+    --login-notice: #f8fafc;
+    --login-heading: #0f172a;
+    --login-checkbox-border: #cbd5e1;
+    --login-focus-ring: rgb(15 23 42 / 0.08);
+    --login-grid: rgb(255 255 255 / 0.055);
+    --login-icon-well-bg: rgb(255 255 255 / 0.06);
+    --login-icon-well-border: rgb(255 255 255 / 0.12);
+    --login-lockup-bg: rgb(255 255 255 / 0.08);
+    --login-lockup-border: rgb(255 255 255 / 0.18);
+    color-scheme: light;
+    background-color: var(--login-white);
+    color: var(--login-heading);
+    font-family: var(--font-sans);
+}
+
+.login-brand {
+    background-color: var(--login-brand-from);
+    background-image:
+        linear-gradient(to right, var(--login-grid) 1px, transparent 1px),
+        linear-gradient(to bottom, var(--login-grid) 1px, transparent 1px),
+        linear-gradient(to right, var(--login-brand-from), var(--login-brand-to));
+    background-size:
+        32px 32px,
+        32px 32px,
+        100% 100%;
+}
+
+.login-shell .login-input {
+    height: 44px;
+    width: 100%;
+    padding: 0 14px;
+    border: 1px solid var(--login-hairline);
+    border-radius: 8px;
+    background-color: var(--login-white);
+    color: var(--login-heading);
+    font-size: 14px;
+    line-height: 1.25;
+    transition:
+        border-color var(--duration-fast),
+        box-shadow var(--duration-fast);
+}
+
+.login-shell .login-input::placeholder {
+    color: var(--login-muted);
+}
+
+.login-shell .login-input:focus,
+.login-shell .login-input:focus-visible {
+    border-color: var(--login-navy);
+    box-shadow: 0 0 0 3px var(--login-focus-ring);
+    outline: none;
+}
+
+.login-shell .login-input[aria-invalid='true'] {
+    border-color: var(--color-critical);
+}
+
+.login-shell .login-input-password {
+    padding-right: 44px;
+}
+
+.login-shell .input-checkbox {
+    border-color: var(--login-checkbox-border);
+    border-radius: 4px;
+    background-color: var(--login-white);
+}
+
+.login-shell .input-checkbox:checked {
+    border-color: var(--login-navy);
+    background-color: var(--login-navy);
+    background-image: url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath fill='none' stroke='%23ffffff' stroke-width='2' stroke-linecap='round' stroke-linejoin='round' d='M2.5 6.2l2.4 2.4L9.6 3.9'/%3E%3C/svg%3E");
+}
+
+@layer base {
+    html {
+        @apply scroll-smooth;
+        -webkit-text-size-adjust: 100%;
+    }
+
+    body {
+        @apply bg-shell font-sans text-base text-ink antialiased;
+    }
+
+    /* Every number in this system aligns in a column. */
+    :where(table, .tabular, .font-mono) {
+        font-variant-numeric: tabular-nums;
+    }
+
+    /* One focus treatment everywhere: an accent ring with a surface halo, so
+       it stays visible on canvas, on a panel, and on a filled button alike. */
+    :focus-visible {
+        outline: 2px solid var(--color-focus);
+        outline-offset: 2px;
+        border-radius: var(--radius-sm);
+    }
+
+    h1,
+    h2,
+    h3,
+    h4 {
+        @apply text-ink;
+        text-wrap: balance;
+        letter-spacing: -0.011em;
+    }
+
+    /* Filipino runs longer than English. Nothing may overflow its cell. */
+    p {
+        text-wrap: pretty;
+    }
+
+    ::placeholder {
+        @apply text-ink-subtle;
+    }
+
+    @supports (scrollbar-color: auto) {
+        * {
+            scrollbar-color: var(--color-line-strong) transparent;
+            scrollbar-width: thin;
+        }
+    }
+}
+
+@layer components {
+    /* ---- Label: the small caps that name a field or a column ----------- */
+    .label-eyebrow {
+        @apply text-2xs font-semibold tracking-[0.06em] text-ink-subtle uppercase;
+    }
+
+    .text-eyebrow {
+        font-family: var(--font-sans);
+        font-size: 0.6875rem;
+        font-weight: 600;
+        letter-spacing: 0.16em;
+        text-transform: uppercase;
+    }
+
+    .bg-plate {
+        background-image: linear-gradient(
+            160deg,
+            var(--color-accent) 0%,
+            var(--color-accent-hover) 62%,
+            color-mix(in srgb, var(--color-brand) 55%, var(--color-accent-hover)) 100%
+        );
+    }
+
+    /* Chamber agenda hero: deep navy plate, left → right, with hairlines. */
+    .bg-floor-plate {
+        background-color: var(--color-floor-plate);
+        background-image:
+            repeating-linear-gradient(to right, rgb(255 255 255 / 0.08) 0 1px, transparent 1px 88px),
+            linear-gradient(to right, var(--color-floor-plate) 0%, rgb(24, 41, 74) 50%, rgb(31, 54, 86) 100%);
+    }
+
+    /* Record detail hero: the same navy walk, without the chamber hairlines. */
+    .bg-record-hero {
+        background-color: var(--color-floor-plate);
+        background-image: linear-gradient(
+            to right,
+            var(--color-floor-plate) 0%,
+            rgb(24, 41, 74) 55%,
+            rgb(31, 54, 86) 100%
+        );
+    }
+
+    /* Secretariat desk: a warmer navy walk used only on the home plate. */
+    .bg-dashboard-hero {
+        background-color: rgb(11, 32, 64);
+        background-image: linear-gradient(
+            105deg,
+            rgb(11, 32, 64) 0%,
+            rgb(16, 48, 88) 46%,
+            rgb(22, 68, 118) 100%
+        );
+    }
+
+    .bg-hairlines {
+        background-image: repeating-linear-gradient(
+            to right,
+            color-mix(in srgb, var(--color-accent-on) 14%, transparent) 0 1px,
+            transparent 1px 88px
+        );
+    }
+
+    /*
+     | Native checkbox. Checked fill and the check glyph must be one rule:
+     | `twMerge` treats `checked:bg-accent` and `checked:bg-[image:…]` as the
+     | same `bg-*` utility, so the fill is dropped and a white mark sits on a
+     | white surface — the control looks off when it is on.
+     */
+    .input-checkbox {
+        appearance: none;
+        width: 1rem;
+        height: 1rem;
+        flex-shrink: 0;
+        border-radius: var(--radius-xs);
+        border: 1px solid var(--color-line-control);
+        background-color: var(--color-surface);
+        background-size: 0.75rem;
+        background-position: center;
+        background-repeat: no-repeat;
+        transition:
+            border-color var(--duration-fast),
+            background-color var(--duration-fast);
+    }
+
+    .input-checkbox:checked {
+        border-color: var(--color-accent);
+        background-color: var(--color-accent);
+        background-image: url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath fill='none' stroke='%23ffffff' stroke-width='2' stroke-linecap='round' stroke-linejoin='round' d='M2.5 6.2l2.4 2.4L9.6 3.9'/%3E%3C/svg%3E");
+    }
+
+    .input-checkbox:focus-visible {
+        outline: 2px solid var(--color-focus);
+        outline-offset: 2px;
+    }
+
+    .input-checkbox:disabled {
+        cursor: not-allowed;
+        opacity: 0.45;
+    }
+
+    .input-checkbox[aria-invalid='true'] {
+        border-color: var(--color-critical);
+        background-color: var(--color-critical-soft);
+    }
+
+    /* ---- Machine output ------------------------------------------------
+       Separated by material, never by hue: a cool surface under a faint
+       diagonal hatch that no part of the record ever wears. */
+    .machine-surface {
+        background-color: var(--color-machine-surface);
+        background-image: repeating-linear-gradient(
+            135deg,
+            color-mix(in srgb, var(--color-machine-line) 26%, transparent) 0,
+            color-mix(in srgb, var(--color-machine-line) 26%, transparent) 1px,
+            transparent 1px,
+            transparent 7px
+        );
+    }
+
+    /* Retained for AI surfaces that predate the primitives. */
+    .ai-content {
+        @apply rounded-[var(--radius-md)] border border-[var(--color-machine-line)] p-4;
+        background-color: var(--color-machine-surface);
+    }
+
+    .ai-badge {
+        @apply inline-flex items-center gap-1 rounded-[var(--radius-xs)] border border-[var(--color-machine-line)] bg-surface px-1.5 py-0.5 font-mono text-2xs font-medium tracking-[0.04em] text-[var(--color-machine-ink)] uppercase;
+    }
+
+    /* ---- Diff ---------------------------------------------------------- */
+    .diff-added {
+        @apply bg-success-soft text-success;
+    }
+
+    .diff-removed {
+        @apply bg-critical-soft text-critical;
+    }
+
+    /* ---- Record prose: the measure's own text -------------------------- */
+    .record-prose {
+        @apply text-md leading-7 text-ink;
+        max-width: 68ch;
+    }
+
+    .record-prose p + p {
+        @apply mt-4;
+    }
+
+    /* ---- The application sheet -----------------------------------------
+       Everything the staff shell contains sits on one white plane that floats
+       clear of the viewport edge. The frame around it is what makes the sheet
+       read as a document rather than as a website. */
+    .app-sheet {
+        background-color: var(--color-canvas);
+        border-radius: var(--radius-2xl);
+        box-shadow: var(--shadow-sheet);
+        border: 1px solid var(--color-line);
+    }
+}
+
+/*
+ | The authored moment: THE ADVANCE.
+ |
+ | A record only ever moves one step at a time through its state machine, and
+ | that step is the single most consequential event in the product. When it
+ | happens the new status chip wipes in from its leading edge while an accent
+ | rule sweeps the full width beneath it — the interface underlining the fact
+ | that something has been entered into the record. One move, ~260ms, no
+ | bounce, and it always resolves to a state that is legible even if the
+ | animation never runs.
+ */
+@keyframes advance-wipe {
+    from {
+        clip-path: inset(0 100% 0 0);
+        opacity: 0.4;
+    }
+
+    to {
+        clip-path: inset(0 0 0 0);
+        opacity: 1;
+    }
+}
+
+@keyframes advance-rule {
+    from {
+        transform: scaleX(0);
+    }
+
+    to {
+        transform: scaleX(1);
+    }
+}
+
+/* The live pulse: slow, low-contrast, and only ever on the one dot that says
+   a session is actually running. */
+@keyframes live-pulse {
+    0%,
+    100% {
+        opacity: 1;
+        transform: scale(1);
+    }
+
+    50% {
+        opacity: 0.45;
+        transform: scale(0.82);
+    }
+}
+
+@keyframes rise-in {
+    from {
+        opacity: 0;
+        transform: translateY(4px);
+    }
+
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+@keyframes slide-in-from-edge {
+    from {
+        opacity: 0.6;
+        transform: translateX(-12px);
+    }
+
+    to {
+        opacity: 1;
+        transform: translateX(0);
+    }
+}
+
+/* Waiting on the model: a slow sweep across the hatch, and three dots that
+   breathe in sequence. No bounce — the record is being searched, not loaded. */
+@keyframes machine-scan {
+    from {
+        transform: translateX(-45%);
+    }
+
+    to {
+        transform: translateX(165%);
+    }
+}
+
+@keyframes thinking-dot {
+    0%,
+    80%,
+    100% {
+        opacity: 0.28;
+    }
+
+    40% {
+        opacity: 1;
+    }
+}
+
+@layer components {
+    .animate-advance {
+        animation: advance-wipe var(--duration-slow) var(--ease-out-quint);
+    }
+
+    .animate-advance-rule {
+        transform-origin: left;
+        animation: advance-rule var(--duration-slow) var(--ease-out-quint);
+    }
+
+    .animate-live-pulse {
+        animation: live-pulse 2.4s var(--ease-standard) infinite;
+    }
+
+    .animate-rise-in {
+        animation: rise-in var(--duration-base) var(--ease-out-quint);
+    }
+
+    .animate-edge-in {
+        animation: slide-in-from-edge var(--duration-slow) var(--ease-out-quint);
+    }
+
+    .ai-processing-scan {
+        pointer-events: none;
+        position: absolute;
+        inset-block: 0;
+        inset-inline-start: 0;
+        width: 38%;
+        background: linear-gradient(
+            90deg,
+            transparent,
+            color-mix(in srgb, var(--color-machine-ink) 14%, transparent),
+            transparent
+        );
+        animation: machine-scan 2.2s var(--ease-standard) infinite;
+    }
+
+    .ai-thinking-dots {
+        @apply inline-flex items-center gap-1;
+    }
+
+    .ai-thinking-dots > span {
+        @apply size-1.5 rounded-full bg-current;
+        animation: thinking-dot 1.4s var(--ease-standard) infinite;
+    }
+
+    .ai-thinking-dots > span:nth-child(2) {
+        animation-delay: 0.16s;
+    }
+
+    .ai-thinking-dots > span:nth-child(3) {
+        animation-delay: 0.32s;
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+        animation-duration: 0.01ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: 0.01ms !important;
+        scroll-behavior: auto !important;
+    }
+}
+
+@media print {
+    /* Staff do print the record. Drop the chrome, keep the rules. */
+    body {
+        background: #ffffff;
+        color: #0f1419;
+    }
+
+    [data-print-hide] {
+        display: none !important;
+    }
+
+    .app-sheet {
+        box-shadow: none !important;
+        border: 0 !important;
+        border-radius: 0 !important;
+    }
+
+    .shadow-\[var\(--shadow-sm\)\],
+    .shadow-\[var\(--shadow-md\)\],
+    .shadow-\[var\(--shadow-lg\)\] {
+        box-shadow: none !important;
+    }
+}

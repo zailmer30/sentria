@@ -1,0 +1,26 @@
+flowchart TB
+    startNode([A measure is filed]) --> reviewNode[Secretariat reviews and registers it]
+    reviewNode --> committeeQ{Sent to a committee?}
+    committeeQ -->|yes| referNode[Committee studies it and writes a report]
+    committeeQ -->|no| agendaNode[Secretariat puts it on a session agenda]
+    referNode --> agendaNode
+    agendaNode --> callOrder[Presiding officer calls the session to order]
+    callOrder --> rollCall[Secretariat records who is present]
+    rollCall --> quorumNote[System shows if quorum is met - officer decides whether to proceed]
+    quorumNote --> hearItem[Body hears the item: read, debate, maybe amend]
+    hearItem --> motionNode[A member moves a motion]
+    motionNode --> voteQ{Does this item need a vote?}
+    voteQ -->|yes| openVote[Officer or secretariat opens voting]
+    openVote --> castVote[Members vote yes, no, abstain, or inhibit]
+    castVote --> closeVote[Officer or secretariat closes voting]
+    closeVote --> nextItem{More agenda items?}
+    voteQ -->|no| nextItem
+    nextItem -->|yes| hearItem
+    nextItem -->|no| adjournNode[Officer adjourns]
+    adjournNode --> minutesDraft[System drafts minutes from the official record]
+    minutesDraft --> minutesEdit[Secretariat edits and reviews the minutes]
+    minutesEdit --> minutesFinal[Presiding officer approves and finalizes]
+    minutesFinal --> publishQ{Release to the public?}
+    publishQ -->|yes| publishNode[Secretariat publishes it]
+    publishNode --> portalNode([Public can read it on the portal])
+    publishQ -->|no| archiveNode([Kept internal and archived])

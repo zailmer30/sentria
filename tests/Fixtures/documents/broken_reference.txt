@@ -1,0 +1,5 @@
+SECTION 1. Short Title.
+This measure shall be known as the Broken Reference Demo Ordinance.
+
+SECTION 8. Penalties.
+Any violation pursuant to Section 12 shall be penalized with a fine of PHP 5,000.00.
