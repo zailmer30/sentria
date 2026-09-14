@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+# artisan serve spawns `php -S` from public/ and does not inherit parent `-d` flags.
+# PHP_INI_SCAN_DIR with a leading colon keeps the system scan dir, then adds ours.
+set -euo pipefail
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+export PHP_INI_SCAN_DIR=":${ROOT}/config/php/conf.d"
+cd "$ROOT"
+exec php artisan serve --host=0.0.0.0 --port=8000 "$@"

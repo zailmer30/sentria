@@ -1,0 +1,400 @@
+erDiagram
+    %% Sentria domain ERD as implemented.
+    %% Domain PKs are ULID CHAR(26). HTTP sessions live in http_sessions, not sessions.
+    %% Soft deletes: users, committees, sessions, documents, agenda_items,
+    %%   committee_reports, ordinances, resolutions, minutes, transcripts,
+    %%   publications, private_notes, ai_conversations.
+    %% Append-only: votes, audit_logs.
+    %% document_grants CHECK: exactly one of user_id, role_id, committee_id.
+    %% votes UNIQUE NULLS NOT DISTINCT (session_id, agenda_item_id, voting_round, user_id).
+    %% Extra FKs (registered_by, secretary_id, report document_id, repealed_by) are attributes only:
+    %% mermaid.live allows one relationship per entity pair.
+
+    users ||--o{ model_has_roles : assigned
+    roles ||--o{ model_has_roles : role_of
+    roles ||--o{ role_has_permissions : grants
+    permissions ||--o{ role_has_permissions : granted
+    users ||--o{ model_has_permissions : direct
+
+    users ||--o{ system_settings : updates
+    users ||--o{ documents : authors
+    users ||--o{ sessions : presides
+    users ||--o{ session_attendance : attends
+    users ||--o{ votes : casts
+    users ||--o{ motions : moves
+    users ||--o{ committee_members : sits
+    users ||--o{ private_notes : owns
+    users ||--o{ bookmarks : saves
+    users ||--o{ ai_conversations : chats
+    users ||--o{ audit_logs : actor
+    users ||--o{ document_grants : granted_user
+
+    roles ||--o{ document_grants : granted_role
+    committees ||--o{ document_grants : granted_committee
+
+    sessions ||--o{ session_attendance : records
+    sessions ||--o{ agenda_items : contains
+    sessions ||--o{ documents : files
+    sessions ||--o{ motions : hears
+    sessions ||--o{ votes : tallies
+    sessions ||--o| minutes : produces
+    sessions ||--o{ transcripts : transcribes
+    sessions ||--o{ committee_referrals : may_refer
+
+    agenda_items ||--o{ agenda_items : parent
+    agenda_items ||--o{ motions : about
+    agenda_items ||--o{ votes : about
+    agenda_items ||--o{ transcripts : of_item
+    agenda_items ||--o{ committee_referrals : may_link
+
+    documents ||--o{ document_versions : versions
+    documents ||--o{ document_metadata : meta
+    documents ||--o{ document_grants : acl
+    documents ||--o{ document_embeddings : chunks
+    documents ||--o{ committee_referrals : referred
+    documents ||--o{ agenda_items : scheduled
+    documents ||--o| ordinances : becomes
+    documents ||--o| resolutions : becomes
+    documents ||--o{ publications : published_as
+    documents ||--o{ private_notes : notable
+    documents ||--o{ bookmarks : bookmarkable
+    documents ||--o{ committee_reports : subject_of
+    documents ||--o{ ai_citations : cited
+
+    document_versions ||--o{ document_embeddings : chunked
+    document_versions ||--o{ publications : pinned
+    document_versions ||--o{ ai_citations : version_cited
+
+    committees ||--o{ committee_members : members
+    committees ||--o{ committee_referrals : receives
+    committees ||--o{ committee_reports : writes
+    committees ||--o{ documents : assigned
+    committees ||--o{ agenda_items : presents
+
+    committee_referrals ||--o{ committee_reports : yields
+
+    motions ||--o{ motions : parent
+    motions ||--o{ votes : decided_by
+
+    ordinances ||--o{ ordinances : amends
+
+    ai_conversations ||--o{ ai_messages : contains
+    ai_messages ||--o{ ai_citations : cites
+    document_embeddings ||--o{ ai_citations : sourced_from
+
+    users {
+        string id PK
+        string email UK
+        string display_name
+        string employee_number UK
+        boolean is_seated_member
+        boolean is_active
+        string locale
+    }
+
+    roles {
+        string id PK
+        string name UK
+        string guard_name
+        string role_label
+        boolean is_system
+        int precedence
+    }
+
+    permissions {
+        string id PK
+        string name UK
+        string guard_name
+        string module
+    }
+
+    model_has_roles {
+        string role_id PK
+        string model_id PK
+        string model_type PK
+    }
+
+    model_has_permissions {
+        string permission_id PK
+        string model_id PK
+        string model_type PK
+    }
+
+    role_has_permissions {
+        string permission_id PK
+        string role_id PK
+    }
+
+    system_settings {
+        string id PK
+        string setting_key UK
+        string group_name
+        string value
+        boolean is_public
+        boolean is_locked
+        string updated_by FK
+    }
+
+    committees {
+        string id PK
+        string slug UK
+        string code UK
+        string name
+        string committee_type
+        boolean is_active
+    }
+
+    committee_members {
+        string id PK
+        string committee_id FK
+        string user_id FK
+        string position
+        boolean is_active
+    }
+
+    sessions {
+        string id PK
+        string session_number UK
+        string session_type
+        string status
+        string presiding_officer_id FK
+        string secretary_id FK
+        string quorum_declared_by FK
+        int quorum_required
+        boolean is_public
+        datetime scheduled_start_at
+    }
+
+    session_attendance {
+        string id PK
+        string session_id FK
+        string user_id FK
+        string status
+        string recorded_by FK
+    }
+
+    documents {
+        string id PK
+        string reference_number UK
+        string tracking_number UK
+        string slug UK
+        string document_type
+        string status
+        string confidentiality
+        boolean is_public
+        string author_id FK
+        string registered_by FK
+        string session_id FK
+        string committee_id FK
+    }
+
+    document_versions {
+        string id PK
+        string document_id FK
+        int version_number
+        boolean is_current
+        string checksum_sha256
+        string scan_status
+        string ocr_status
+        string processing_status
+        string uploaded_by FK
+    }
+
+    document_metadata {
+        string id PK
+        string document_id FK
+        string meta_key
+        string source
+        string verified_by FK
+    }
+
+    document_grants {
+        string id PK
+        string document_id FK
+        string user_id FK
+        string role_id FK
+        string committee_id FK
+        string ability
+        string granted_by FK
+    }
+
+    document_embeddings {
+        string id PK
+        string document_id FK
+        string document_version_id FK
+        int chunk_index
+        string confidentiality
+        boolean is_public
+        string embedding
+        string content_hash
+    }
+
+    agenda_items {
+        string id PK
+        string session_id FK
+        string parent_id FK
+        string document_id FK
+        string committee_id FK
+        string presented_by FK
+        int position
+        string status
+        boolean requires_vote
+        int voting_round
+        datetime voting_open_at
+    }
+
+    committee_referrals {
+        string id PK
+        string document_id FK
+        string committee_id FK
+        string session_id FK
+        string agenda_item_id FK
+        string status
+        boolean is_primary
+        string referred_by FK
+        datetime due_at
+    }
+
+    committee_reports {
+        string id PK
+        string committee_referral_id FK
+        string committee_id FK
+        string subject_document_id FK
+        string document_id FK
+        string report_number UK
+        string recommendation
+        string status
+        string submitted_by FK
+    }
+
+    ordinances {
+        string id PK
+        string document_id UK
+        string ordinance_number UK
+        int series_year
+        string status
+        string amends_ordinance_id FK
+        string repealed_by_ordinance_id FK
+    }
+
+    resolutions {
+        string id PK
+        string document_id UK
+        string resolution_number UK
+        int series_year
+        string status
+    }
+
+    motions {
+        string id PK
+        string session_id FK
+        string agenda_item_id FK
+        string parent_motion_id FK
+        string moved_by FK
+        string seconded_by FK
+        string motion_type
+        string status
+        int voting_round
+    }
+
+    votes {
+        string id PK
+        string session_id FK
+        string agenda_item_id FK
+        string motion_id FK
+        string user_id FK
+        int voting_round
+        string choice
+        string method
+        datetime cast_at
+        string recorded_by FK
+    }
+
+    minutes {
+        string id PK
+        string session_id UK
+        string status
+        int revision
+        string ai_draft
+        string prepared_by FK
+        string reviewed_by FK
+        string approved_by FK
+    }
+
+    transcripts {
+        string id PK
+        string session_id FK
+        string agenda_item_id FK
+        string source
+        string status
+        string segments
+        string created_by FK
+    }
+
+    publications {
+        string id PK
+        string document_id FK
+        string document_version_id FK
+        string public_slug UK
+        string status
+        datetime published_at
+        datetime unpublished_at
+        string published_by FK
+    }
+
+    private_notes {
+        string id PK
+        string user_id FK
+        string notable_type
+        string notable_id
+        string body
+    }
+
+    bookmarks {
+        string id PK
+        string user_id FK
+        string bookmarkable_type
+        string bookmarkable_id
+        string bookmark_label
+    }
+
+    ai_conversations {
+        string id PK
+        string user_id FK
+        string context_type
+        string context_id
+        string model
+        boolean is_archived
+    }
+
+    ai_messages {
+        string id PK
+        string ai_conversation_id FK
+        string role
+        string content
+        boolean is_flagged
+    }
+
+    ai_citations {
+        string id PK
+        string ai_message_id FK
+        string document_id FK
+        string document_version_id FK
+        string document_embedding_id FK
+        int rank
+        float similarity
+    }
+
+    audit_logs {
+        string id PK
+        int sequence UK
+        string event
+        string category
+        string auditable_type
+        string auditable_id
+        string user_id FK
+        boolean is_ai_actor
+        string previous_hash
+        string hash UK
+        int occurred_at_epoch
+    }
