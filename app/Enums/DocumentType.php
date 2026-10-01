@@ -85,6 +85,19 @@ enum DocumentType: string
     }
 
     /**
+     * Ordinances take three readings. Resolutions are adopted on second reading.
+     */
+    public function requiresThirdReading(): bool
+    {
+        return $this->isOrdinanceMeasure();
+    }
+
+    public function finalReadingNumber(): int
+    {
+        return $this->requiresThirdReading() ? 3 : 2;
+    }
+
+    /**
      * @return list<self>
      */
     public static function measures(): array

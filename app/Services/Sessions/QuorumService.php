@@ -4,6 +4,7 @@ namespace App\Services\Sessions;
 
 use App\Enums\AttendanceStatus;
 use App\Models\LegislativeSession;
+use App\Models\SessionAttendance;
 use App\Models\SystemSetting;
 use App\Models\User;
 
@@ -12,23 +13,32 @@ class QuorumService
     public function forSession(LegislativeSession $session): QuorumDisplayDto
     {
         $seatedCount = $this->resolveSeatedCount($session);
-        $presentCount = $session->attendance()
+        $present = $session->attendance()
             ->whereIn('status', [
                 AttendanceStatus::Present->value,
                 AttendanceStatus::Late->value,
             ])
-            ->count();
+            ->with('user')
+            ->orderBy('created_at')
+            ->get();
+        $presentCount = $present->count();
 
         // on-official-business (including members abroad) is seated but not
         // present. It does not count toward quorum.
 
-        $required = $this->resolveRequiredQuorum($session, $seatedCount);
+        [$required, $rule] = $this->resolveRequiredQuorum($session, $seatedCount);
 
         return new QuorumDisplayDto(
             seatedCount: $seatedCount,
             presentCount: $presentCount,
             required: $required,
             met: $presentCount >= $required,
+            rule: $rule,
+            presentMembers: $present->map(fn (SessionAttendance $record): array => [
+                'id' => (string) $record->user_id,
+                'display_name' => $record->user?->display_name,
+                'avatar_url' => $record->user?->avatarUrl(),
+            ])->values()->all(),
         );
     }
 
@@ -41,20 +51,23 @@ class QuorumService
         return User::query()->where('is_seated_member', true)->where('is_active', true)->count();
     }
 
-    private function resolveRequiredQuorum(LegislativeSession $session, int $seatedCount): int
+    /**
+     * @return array{0: int, 1: string}
+     */
+    private function resolveRequiredQuorum(LegislativeSession $session, int $seatedCount): array
     {
         if ($session->quorum_required !== null && $session->quorum_required > 0) {
-            return $session->quorum_required;
+            return [$session->quorum_required, 'fixed'];
         }
 
         $rule = (string) ($this->settingScalar('quorum.rule') ?? config('sentria.quorum.rule', 'majority_of_seated'));
 
         return match ($rule) {
-            'two_thirds_of_seated' => (int) ceil($seatedCount * 2 / 3),
-            'fixed' => max(1, (int) ($this->settingScalar('quorum.fixed_threshold')
+            'two_thirds_of_seated' => [(int) ceil($seatedCount * 2 / 3), $rule],
+            'fixed' => [max(1, (int) ($this->settingScalar('quorum.fixed_threshold')
                 ?? config('sentria.quorum.fixed_threshold')
-                ?? 1)),
-            default => intdiv(max($seatedCount, 1), 2) + 1,
+                ?? 1)), $rule],
+            default => [intdiv(max($seatedCount, 1), 2) + 1, 'majority_of_seated'],
         };
     }
 

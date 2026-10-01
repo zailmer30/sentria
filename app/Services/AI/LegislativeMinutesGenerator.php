@@ -3,12 +3,14 @@
 namespace App\Services\AI;
 
 use App\Contracts\AI\MinutesGenerationService;
+use App\DTO\AI\MinutesDiscussionResult;
 use App\Enums\AttendanceStatus;
 use App\Models\AgendaItem;
 use App\Models\AuditLog;
 use App\Models\LegislativeSession;
 use App\Models\Minutes;
 use App\Models\Motion;
+use App\Models\SessionGuest;
 use App\Models\User;
 use App\Models\Vote;
 use App\Services\Audit\AuditLogger;
@@ -32,9 +34,13 @@ class LegislativeMinutesGenerator implements MinutesGenerationService
 
     public const SECRETARIAT_MINUTES_HEADING = '## Secretariat Minutes';
 
+    public const INVITED_GUESTS_HEADING = '## Invited guests';
+
     public function __construct(
         private readonly AuditLogger $audit,
         private readonly GuardedStateTransition $transitions,
+        private readonly AgendaTranscriptSlicer $transcriptSlicer,
+        private readonly MinutesDiscussionSummarizer $discussions,
     ) {}
 
     public function draftFromSession(User $actor, LegislativeSession $session): Minutes
@@ -49,7 +55,9 @@ class LegislativeMinutesGenerator implements MinutesGenerationService
 
         $session->loadMissing([
             'agendaItems',
+            'agendaItems.minutesCorrections',
             'attendance.user',
+            'guests',
             'motions.mover',
             'motions.seconder',
             'votes.agendaItem',
@@ -72,14 +80,27 @@ class LegislativeMinutesGenerator implements MinutesGenerationService
 
         $voteWindows = $this->resolveAndBackfillVoteWindows($session);
         $voteTallies = $this->officialVoteTallies($session, $voteWindows);
-        $draft = $this->buildStructuredDraft($session, $voteTallies, $voteWindows);
+        $discussion = $this->discussions->summarize(
+            $session,
+            $this->transcriptSlicer->speechByItem($session),
+        );
+        $draft = $this->buildStructuredDraft($session, $voteTallies, $voteWindows, $discussion);
 
         $metadata = [
             'banner' => self::DRAFT_BANNER,
             'source' => 'official-records',
             'requires_human_verification' => true,
             'vote_tallies' => $voteTallies,
+            'discussion_summaries_skipped' => $discussion->skipped,
         ];
+
+        if ($discussion->skipReason !== null) {
+            $metadata['discussion_summaries_reason'] = $discussion->skipReason;
+        }
+
+        if ($discussion->chatModel !== null) {
+            $metadata['discussion_chat_model'] = $discussion->chatModel;
+        }
 
         $minutes->update([
             'ai_draft' => $draft,
@@ -108,6 +129,9 @@ class LegislativeMinutesGenerator implements MinutesGenerationService
                 'session_id' => $session->getKey(),
                 'status' => $minutes->status->getValue(),
                 'vote_tally_count' => count($voteTallies),
+                'discussion_summaries_skipped' => $discussion->skipped,
+                'discussion_summaries_reason' => $discussion->skipReason,
+                'discussion_paragraph_count' => count($discussion->paragraphs),
             ],
             message: 'AI draft minutes generated from official session records.',
         );
@@ -313,8 +337,12 @@ class LegislativeMinutesGenerator implements MinutesGenerationService
      * @param  list<array{agenda_item_id: string|null, title: string, voting_round: int, yes: int, no: int, abstain: int, inhibit: int, opened_at: string|null, closed_at: string|null}>  $voteTallies
      * @param  array<string, array<int, array{opened: Carbon|null, closed: Carbon|null}>>  $voteWindows
      */
-    private function buildStructuredDraft(LegislativeSession $session, array $voteTallies, array $voteWindows): string
-    {
+    private function buildStructuredDraft(
+        LegislativeSession $session,
+        array $voteTallies,
+        array $voteWindows,
+        MinutesDiscussionResult $discussion,
+    ): string {
         $lines = [
             '# Minutes — '.$session->title,
             '',
@@ -339,6 +367,12 @@ class LegislativeMinutesGenerator implements MinutesGenerationService
 
             if (in_array($status, [AttendanceStatus::Present->value, AttendanceStatus::Late->value], true)) {
                 $line .= ', checked in '.$this->clock($record->checked_in_at);
+            } else {
+                $remarks = trim((string) $record->remarks);
+
+                if ($remarks !== '') {
+                    $line .= ' ('.$remarks.')';
+                }
             }
 
             $lines[] = $line;
@@ -348,9 +382,19 @@ class LegislativeMinutesGenerator implements MinutesGenerationService
             $lines[] = '- No attendance records.';
         }
 
+        $guestLines = $session->guests
+            ->map(fn (SessionGuest $guest): string => $guest->minutesLine())
+            ->all();
+
+        if ($guestLines !== []) {
+            $lines[] = '';
+            $lines[] = self::INVITED_GUESTS_HEADING;
+            array_push($lines, ...$guestLines);
+        }
+
         $lines[] = '';
         $lines[] = '## Proceedings';
-        $lines = array_merge($lines, $this->proceedingsLines($session, $voteTallies, $voteWindows));
+        $lines = array_merge($lines, $this->proceedingsLines($session, $voteTallies, $voteWindows, $discussion->paragraphs));
 
         $lines[] = '';
         $lines[] = '## Motions on Record';
@@ -416,10 +460,15 @@ class LegislativeMinutesGenerator implements MinutesGenerationService
     /**
      * @param  list<array{agenda_item_id: string|null, title: string, voting_round: int, yes: int, no: int, abstain: int, inhibit: int, opened_at: string|null, closed_at: string|null}>  $voteTallies
      * @param  array<string, array<int, array{opened: Carbon|null, closed: Carbon|null}>>  $voteWindows
+     * @param  array<string, string>  $discussionParagraphs
      * @return list<string>
      */
-    private function proceedingsLines(LegislativeSession $session, array $voteTallies, array $voteWindows): array
-    {
+    private function proceedingsLines(
+        LegislativeSession $session,
+        array $voteTallies,
+        array $voteWindows,
+        array $discussionParagraphs,
+    ): array {
         $lines = [];
         $motionsByItem = $session->motions->groupBy(fn (Motion $motion): string => (string) ($motion->agenda_item_id ?? 'none'));
         $tallyRoundsByItem = [];
@@ -448,11 +497,28 @@ class LegislativeMinutesGenerator implements MinutesGenerationService
                 $item->title,
             );
 
+            $discussion = $discussionParagraphs[$itemId] ?? null;
+
+            if (is_string($discussion) && $discussion !== '') {
+                $lines[] = '  - '.$discussion;
+            }
+
             if ($item->category === 'roll-call') {
                 if ($session->quorum_declared_at !== null) {
                     $lines[] = '  - Quorum declared '.$this->clock($session->quorum_declared_at);
                 } else {
                     $lines[] = '  - Quorum not declared';
+                }
+            }
+
+            if ($item->category === 'approval-minutes' && $item->document_id !== null) {
+                $lines[] = '  - Considered the minutes: '.$item->title;
+
+                $corrections = $item->minutesCorrections ?? collect();
+
+                foreach ($corrections as $correction) {
+                    $page = $correction->page_number !== null ? ' p.'.$correction->page_number : '';
+                    $lines[] = '  - Correction'.$page.': "'.$correction->as_written.'" should read "'.$correction->should_read.'"';
                 }
             }
 

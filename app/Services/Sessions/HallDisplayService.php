@@ -17,6 +17,8 @@ class HallDisplayService
 
     public const STAGE_DOCUMENT = 'document';
 
+    public const STAGE_REPORT = 'report';
+
     public const STAGE_RESULTS = 'results';
 
     /** @var array{zoom: float, page: int, relative_x: float, relative_y: float} */
@@ -65,6 +67,30 @@ class HallDisplayService
             self::DEFAULT_VIEW,
             $actor,
             'hall.document_shown',
+        );
+    }
+
+    public function showReport(LegislativeSession $session, AgendaItem $agendaItem, User $actor): LegislativeSession
+    {
+        abort_unless($agendaItem->session_id === $session->getKey(), 422);
+
+        $report = app(CommitteeHourService::class)->floorReport($session, $agendaItem);
+
+        if ($report === null) {
+            throw new InvalidArgumentException('This agenda item has no committee report to project.');
+        }
+
+        if (! $actor->can('view', $report)) {
+            throw new InvalidArgumentException('You cannot project this report to the hall.');
+        }
+
+        return $this->persist(
+            $session,
+            self::STAGE_REPORT,
+            $agendaItem->getKey(),
+            null,
+            $actor,
+            'hall.report_shown',
         );
     }
 
@@ -215,6 +241,7 @@ class HallDisplayService
             ],
             message: match ($stage) {
                 self::STAGE_DOCUMENT => 'Document projected to the hall display.',
+                self::STAGE_REPORT => 'Committee report projected to the hall display.',
                 self::STAGE_RESULTS => 'Previous voting result projected to the hall display.',
                 default => 'Hall display returned to the agenda item.',
             },

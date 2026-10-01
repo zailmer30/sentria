@@ -18,14 +18,7 @@ use OwenIt\Auditing\Contracts\Auditable;
 
 /**
  * @property Carbon|null $enacted_on
- * @property Carbon|null $approved_on
- * @property Carbon|null $vetoed_on
- * @property Carbon|null $veto_overridden_on
  * @property Carbon|null $effectivity_date
- * @property Carbon|null $publication_date
- * @property Carbon|null $sp_submitted_on
- * @property Carbon|null $sp_reviewed_on
- * @property string|null $sp_result
  * @property Carbon|null $imported_at
  */
 #[UseFactory(OrdinanceFactory::class)]
@@ -51,13 +44,7 @@ class Ordinance extends Model implements Auditable, HoldsSignedCopy
         return [
             'series_year' => 'integer',
             'enacted_on' => 'date',
-            'approved_on' => 'date',
-            'vetoed_on' => 'date',
-            'veto_overridden_on' => 'date',
             'effectivity_date' => 'date',
-            'publication_date' => 'date',
-            'sp_submitted_on' => 'date',
-            'sp_reviewed_on' => 'date',
             'imported_at' => 'datetime',
         ];
     }
@@ -91,21 +78,8 @@ class Ordinance extends Model implements Auditable, HoldsSignedCopy
         $effectivity = $this->effectivity_date;
 
         return $this->repealed_by_ordinance_id === null
-            && $this->vetoed_on === null
+            && $this->status !== 'vetoed'
             && $effectivity instanceof Carbon
             && ! $effectivity->isFuture();
-    }
-
-    /**
-     * Days after posting until a measure takes effect, from the filing
-     * checklist. Falls back to the Local Government Code default of 10.
-     */
-    public static function daysUntilEffectivity(int|string|null $proposed): int
-    {
-        if (is_numeric($proposed) && (int) $proposed >= 1) {
-            return (int) $proposed;
-        }
-
-        return 10;
     }
 }

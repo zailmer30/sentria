@@ -15,13 +15,15 @@ type OpenReferral = {
 
 type Props = {
     referral: OpenReferral;
+    nextReportNumber: string;
     open: boolean;
     onOpenChange: (open: boolean) => void;
+    canFileNow?: boolean;
 };
 
 const RECOMMENDATIONS = ['approve', 'disapprove', 'amend', 'defer', 'no-action'] as const;
 
-export function DraftReportDialog({ referral, open, onOpenChange }: Props) {
+export function DraftReportDialog({ referral, nextReportNumber, open, onOpenChange, canFileNow = false }: Props) {
     const { t } = useTranslations();
     const form = useForm({
         committee_referral_id: referral.id,
@@ -29,7 +31,7 @@ export function DraftReportDialog({ referral, open, onOpenChange }: Props) {
         recommendation: 'approve',
         findings: '',
         recommendation_notes: '',
-        report_number: '',
+        file_now: false,
     });
 
     useEffect(() => {
@@ -43,7 +45,7 @@ export function DraftReportDialog({ referral, open, onOpenChange }: Props) {
             recommendation: 'approve',
             findings: '',
             recommendation_notes: '',
-            report_number: '',
+            file_now: false,
         });
         form.clearErrors();
         // Prefill only when the dialog opens or the referral changes.
@@ -57,7 +59,7 @@ export function DraftReportDialog({ referral, open, onOpenChange }: Props) {
             ...data,
             findings: data.findings || null,
             recommendation_notes: data.recommendation_notes || null,
-            report_number: data.report_number || null,
+            file_now: canFileNow,
         }));
 
         form.post('/reports', {
@@ -71,7 +73,10 @@ export function DraftReportDialog({ referral, open, onOpenChange }: Props) {
 
     return (
         <Dialog open={open} onOpenChange={onOpenChange}>
-            <DialogContent title={t('documents.draft_report_title')} description={t('documents.draft_report_hint')}>
+            <DialogContent
+                title={t(canFileNow ? 'documents.submit_report_title' : 'documents.draft_report_title')}
+                description={t(canFileNow ? 'documents.submit_report_hint' : 'documents.draft_report_hint')}
+            >
                 <form onSubmit={submit} className="space-y-4">
                     <Field id="report-committee" label={t('documents.committee')}>
                         <p id="report-committee" className="text-sm text-ink">
@@ -135,17 +140,16 @@ export function DraftReportDialog({ referral, open, onOpenChange }: Props) {
                         id="report_number"
                         label={t('committees.report_number')}
                         hint={t('committees.report_number_hint')}
-                        error={form.errors.report_number}
                     >
                         <Input
                             {...fieldAria('report_number', {
                                 hint: t('committees.report_number_hint'),
-                                error: form.errors.report_number,
                             })}
-                            value={form.data.report_number}
-                            onChange={(event) => form.setData('report_number', event.target.value)}
+                            value={nextReportNumber}
+                            readOnly
+                            aria-readonly="true"
                             autoComplete="off"
-                            className="font-mono"
+                            className="bg-canvas-sunk font-mono"
                             placeholder={t('committees.report_number_placeholder')}
                         />
                     </Field>
@@ -154,8 +158,35 @@ export function DraftReportDialog({ referral, open, onOpenChange }: Props) {
                         <Button type="button" variant="ghost" onClick={() => onOpenChange(false)}>
                             {t('committees.cancel')}
                         </Button>
+                        {canFileNow ? (
+                            <Button
+                                type="button"
+                                variant="secondary"
+                                disabled={form.processing}
+                                onClick={() => {
+                                    form.setData('file_now', false);
+                                    form.transform((data) => ({
+                                        ...data,
+                                        findings: data.findings || null,
+                                        recommendation_notes: data.recommendation_notes || null,
+                                        file_now: false,
+                                    }));
+                                    form.post('/reports', {
+                                        preserveScroll: true,
+                                        onSuccess: () => {
+                                            form.reset();
+                                            onOpenChange(false);
+                                        },
+                                    });
+                                }}
+                            >
+                                {form.processing ? t('committees.saving') : t('committees.create_report_save')}
+                            </Button>
+                        ) : null}
                         <Button type="submit" variant="primary" disabled={form.processing}>
-                            {form.processing ? t('committees.saving') : t('committees.create_report_save')}
+                            {form.processing
+                                ? t('committees.saving')
+                                : t(canFileNow ? 'committees.submit_report' : 'committees.create_report_save')}
                         </Button>
                     </DialogFooter>
                 </form>

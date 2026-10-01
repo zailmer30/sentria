@@ -29,7 +29,7 @@ class PublicPortalResource
             'status_label' => $document?->ordinance?->status
                 ?? $document?->resolution?->status
                 ?? 'Published',
-            'author' => $document?->author?->display_name,
+            'author' => $document?->authorName(),
             'committee' => $document?->committee?->name,
             'year' => $publication->published_at?->year,
             'ordinance_number' => $document?->ordinance?->ordinance_number,

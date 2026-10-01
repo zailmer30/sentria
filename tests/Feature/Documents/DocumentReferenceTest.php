@@ -87,7 +87,7 @@ it('assigns the next tagged reference when a document is filed', function (): vo
             'document_type' => DocumentType::ProposedOrdinance->value,
             'confidentiality' => Confidentiality::Internal->value,
             'enacting_clause' => 'Be it ordained by the Sangguniang Bayan, that:',
-            'proposed_effectivity' => 10,
+            'external_author' => 'Maria Santos',
             'explanatory_note' => 'This measure is proposed to address the stated purpose.',
             'file' => UploadedFile::fake()->createWithContent('nursery.txt', "Section 1\n"),
         ])
@@ -95,7 +95,9 @@ it('assigns the next tagged reference when a document is filed', function (): vo
 
     $document = Document::query()->where('title', 'An ordinance establishing a municipal nursery')->firstOrFail();
 
-    expect($document->reference_number)->toBe('PO-2026-00003');
+    expect($document->reference_number)->toBe('PO-2026-00003')
+        ->and($document->external_author)->toBe('Maria Santos')
+        ->and($document->author_id)->toBe($secretariat->getKey());
 });
 
 it('keeps proposed resolutions on their own yearly series', function (): void {
@@ -111,7 +113,7 @@ it('keeps proposed resolutions on their own yearly series', function (): void {
             'document_type' => DocumentType::ProposedResolution->value,
             'confidentiality' => Confidentiality::Internal->value,
             'enacting_clause' => 'Be it resolved by the Sangguniang Bayan, that:',
-            'proposed_effectivity' => 10,
+            'external_author' => 'Maria Santos',
             'file' => UploadedFile::fake()->createWithContent('aip.txt', "Resolved\n"),
         ])
         ->assertRedirect();

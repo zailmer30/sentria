@@ -203,3 +203,26 @@ it('lets secretariat override tablet check-in afterward', function (): void {
 
     expect(floorAttendanceRecord($session, $member)?->status)->toBe(AttendanceStatus::Absent->value);
 });
+
+it('clears an absence reason when the member checks in from the paperless floor', function (): void {
+    Event::fake([AttendanceUpdated::class]);
+
+    $member = floorAttendanceActor(UserRole::BoardMember, 'remarks');
+    $session = LegislativeSession::factory()->inSession()->create();
+
+    SessionAttendance::factory()->create([
+        'session_id' => $session->getKey(),
+        'user_id' => $member->getKey(),
+        'status' => AttendanceStatus::Absent->value,
+        'remarks' => 'in hospital',
+    ]);
+
+    $this->actingAs($member)
+        ->get(route('sessions.floor.member', $session))
+        ->assertOk();
+
+    $record = floorAttendanceRecord($session, $member);
+
+    expect($record?->status)->toBe(AttendanceStatus::Present->value)
+        ->and($record?->remarks)->toBeNull();
+});

@@ -61,3 +61,8 @@ export function canUseSecretariatFloor(user: AuthUser | null | undefined): boole
         user.permissions.includes('attendance.record')
     );
 }
+
+/** Absent, excused, and official business take a written why on the roll. */
+export function attendanceTakesRemarks(status: string): boolean {
+    return status === 'absent' || status === 'excused' || status === 'on-official-business';
+}

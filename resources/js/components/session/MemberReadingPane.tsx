@@ -1,11 +1,13 @@
 import { DocumentPdfViewer } from '@/components/documents/DocumentPdfViewer';
+import { CommitteeReportBody } from '@/components/documents/CommitteeReportBody';
 import { Button } from '@/components/ui/button';
 import { Notice } from '@/components/ui/notice';
 import { Panel } from '@/components/ui/panel';
+import { useFormatters } from '@/lib/format';
 import { useTranslations } from '@/lib/i18n';
 import { withHonorific } from '@/lib/sessionFloor';
 import { cn } from '@/lib/utils';
-import type { ReadingPackItem } from '@/pages/Sessions/Floor/shared';
+import { referredCommitteeNames, type ReadingPackItem } from '@/pages/Sessions/Floor/shared';
 import { Link } from '@inertiajs/react';
 import { FileText, FileWarning } from 'lucide-react';
 import { useEffect, useState, type ReactNode } from 'react';
@@ -66,7 +68,9 @@ export function MemberReadingPane({
     className,
 }: MemberReadingPaneProps) {
     const { t } = useTranslations();
+    const { formatList } = useFormatters();
     const document = item?.document ?? null;
+    const report = item?.committee_report ?? null;
     const canPreview = Boolean(document?.can_preview && document.preview_url && document.annotations_url);
     const [fullTextOpen, setFullTextOpen] = useState(false);
     const [annotations, setAnnotations] = useState<unknown[]>([]);
@@ -133,11 +137,12 @@ export function MemberReadingPane({
     ].filter(Boolean);
 
     const stage = document?.status_label ?? t('sessions.current_item');
+    const referredNames = referredCommitteeNames(document);
     const referred =
         document?.status === 'committee-referral' || document?.status === 'committee-review';
     const referralNotice = referred
-        ? document.committee
-            ? t('sessions.reading.referred_to_committee', { committee: document.committee })
+        ? referredNames.length > 0
+            ? t('sessions.reading.referred_to_committee', { committee: formatList(referredNames) })
             : t('sessions.reading.referred_to_committee_unnamed')
         : null;
 
@@ -196,7 +201,9 @@ export function MemberReadingPane({
                                     <FileText aria-hidden className="size-3.5" strokeWidth={1.75} />
                                     {fullTextOpen
                                         ? t('sessions.reading.close_full_text')
-                                        : t('sessions.reading.open_full_text')}
+                                        : report
+                                          ? t('sessions.reading.open_measure')
+                                          : t('sessions.reading.open_full_text')}
                                 </Button>
                             ) : document ? (
                                 <Button
@@ -231,7 +238,13 @@ export function MemberReadingPane({
                     </div>
                 ) : null}
 
-                {body && !fullTextOpen ? <MeasureBody text={body} /> : null}
+                {body && !fullTextOpen && !report ? <MeasureBody text={body} /> : null}
+
+                {report && !fullTextOpen ? (
+                    <div className="min-h-0 flex-1 overflow-y-auto px-5 py-5">
+                        <CommitteeReportBody report={report} />
+                    </div>
+                ) : null}
 
                 {fullTextOpen && canPreview ? (
                     <div id="member-full-text" className="min-h-0 flex-1 overflow-hidden">
@@ -251,7 +264,7 @@ export function MemberReadingPane({
                     </div>
                 ) : !item ? (
                     <EmptyReading message={t('sessions.no_current_item')} />
-                ) : !document || body || canPreview ? null : (
+                ) : !document || body || report || canPreview ? null : (
                     <EmptyReading
                         message={
                             document.mime_type && document.mime_type !== 'application/pdf'

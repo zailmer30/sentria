@@ -10,7 +10,7 @@ import { useTranslations } from '@/lib/i18n';
 import { cn } from '@/lib/utils';
 import { Link, router } from '@inertiajs/react';
 import {
-    ArrowUpRight,
+    ArrowRight,
     CalendarDays,
     Check,
     Circle,
@@ -83,10 +83,7 @@ type Props = {
     can: { create: boolean; transition: boolean };
 };
 
-const navyButtonClass =
-    'border-[var(--color-floor-plate)] bg-[var(--color-floor-plate)] text-[var(--color-floor-ink)] shadow-none hover:border-[rgb(24,41,74)] hover:bg-[rgb(24,41,74)]';
-
-const cardClass = 'overflow-hidden rounded-[8px] shadow-[0_1px_2px_rgb(15_27_61/0.06)]';
+const cardClass = 'overflow-hidden rounded-[var(--radius-md)] shadow-xs';
 
 const TARGET_ICON = {
     portal: Globe,
@@ -158,36 +155,52 @@ export default function PublicationsShow({ publication, can }: Props) {
                         </div>
                     </div>
 
-                    <div className="flex flex-wrap items-end justify-between gap-x-4 gap-y-2 border-b border-line">
-                        <nav aria-label={t('publications.record_tabs')} className="flex flex-wrap items-center gap-5">
+                    <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-3">
+                        <nav
+                            aria-label={t('publications.record_tabs')}
+                            className="inline-flex flex-wrap items-center gap-0.5 rounded-[var(--radius-md)] border border-line bg-surface-alt p-1"
+                        >
                             {publication.document ? (
                                 <Link href={`/documents/${publication.document.slug}`} className={tabClass(false)}>
                                     {t('publications.view_document')}
                                 </Link>
                             ) : (
-                                <span className={cn(tabClass(false), 'cursor-not-allowed opacity-45')}>
+                                <span aria-disabled="true" className={cn(tabClass(false), 'cursor-not-allowed opacity-45')}>
                                     {t('publications.view_document')}
                                 </span>
                             )}
-                            <span className={tabClass(true)}>{t('publications.title')}</span>
+                            <span className={tabClass(true)} aria-current="page">
+                                {t('publications.title')}
+                            </span>
                             {published ? (
                                 <Link href={`/portal/documents/${publication.public_slug}`} className={tabClass(false)}>
                                     {t('publications.view_portal')}
                                 </Link>
                             ) : (
-                                <span className={cn(tabClass(false), 'cursor-not-allowed opacity-45')}>
+                                <span aria-disabled="true" className={cn(tabClass(false), 'cursor-not-allowed opacity-45')}>
                                     {t('publications.view_portal')}
                                 </span>
                             )}
                         </nav>
 
-                        <div className="flex flex-wrap items-center gap-2 pb-2">
-                            <Button type="button" variant="secondary" size="sm" onClick={() => void copyLink()}>
+                        <div className="inline-flex flex-wrap items-center gap-0.5 rounded-[var(--radius-md)] border border-line bg-surface p-1 shadow-xs">
+                            <Button
+                                type="button"
+                                variant="ghost"
+                                size="sm"
+                                className="h-8 rounded-[var(--radius-sm)] font-medium text-ink-muted hover:text-ink"
+                                onClick={() => void copyLink()}
+                            >
                                 <Copy aria-hidden="true" strokeWidth={1.75} />
                                 {t('publications.copy_link')}
                             </Button>
                             {publication.document ? (
-                                <Button variant="secondary" size="sm" asChild>
+                                <Button
+                                    variant="ghost"
+                                    size="sm"
+                                    className="h-8 rounded-[var(--radius-sm)] font-medium text-ink-muted hover:text-ink"
+                                    asChild
+                                >
                                     <Link href={`/documents/${publication.document.slug}`}>
                                         <FileText aria-hidden="true" strokeWidth={1.75} />
                                         {t('publications.view_document')}
@@ -213,26 +226,32 @@ export default function PublicationsShow({ publication, can }: Props) {
                 ) : null}
 
                 {hasWorkflow ? (
-                    <div className="flex flex-wrap items-center justify-between gap-3 rounded-[8px] border border-info-line bg-info-soft px-4 py-3">
-                        <p className="max-w-2xl text-sm text-info">
-                            {t('publications.advance_hint', { stage: nextTransition.label })}
-                        </p>
+                    <div className="flex flex-wrap items-center justify-between gap-4 rounded-[var(--radius-md)] border border-line bg-surface px-4 py-3.5 shadow-xs">
+                        <div className="min-w-0 max-w-2xl">
+                            <p className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
+                                <span className="text-2xs font-semibold tracking-[0.14em] text-accent uppercase">
+                                    {t('publications.next_step')}
+                                </span>
+                                <span aria-hidden="true" className="text-ink-faint">
+                                    /
+                                </span>
+                                <span className="text-sm font-semibold text-ink">{nextTransition.label}</span>
+                            </p>
+                            <p className="mt-1 text-sm leading-relaxed text-ink-muted">
+                                {t('publications.advance_hint', { stage: nextTransition.label })}
+                            </p>
+                        </div>
                         <div className="flex flex-wrap items-center gap-2">
                             {publication.document ? (
-                                <Button variant="secondary" size="sm" asChild>
+                                <Button variant="ghost" size="sm" className="text-ink-muted hover:text-ink" asChild>
                                     <Link href={`/documents/${publication.document.slug}`}>
                                         {t('publications.return_to_source')}
                                     </Link>
                                 </Button>
                             ) : null}
-                            <Button
-                                variant="primary"
-                                size="sm"
-                                className={navyButtonClass}
-                                onClick={() => advance(nextTransition.to)}
-                            >
+                            <Button variant="plate" size="sm" onClick={() => advance(nextTransition.to)}>
                                 {t('publications.advance_to', { stage: nextTransition.label })}
-                                <ArrowUpRight aria-hidden="true" strokeWidth={2} />
+                                <ArrowRight aria-hidden="true" strokeWidth={2} />
                             </Button>
                         </div>
                     </div>
@@ -407,8 +426,10 @@ export default function PublicationsShow({ publication, can }: Props) {
 
 function tabClass(active: boolean): string {
     return cn(
-        '-mb-px inline-flex items-center border-b-2 px-1 pb-2.5 text-sm transition-colors',
-        active ? 'border-accent font-medium text-accent' : 'border-transparent text-ink-muted hover:text-ink',
+        'inline-flex h-8 items-center rounded-[var(--radius-sm)] px-3 text-sm transition-colors',
+        active
+            ? 'bg-surface font-medium text-ink shadow-xs ring-1 ring-line'
+            : 'text-ink-muted hover:bg-surface/70 hover:text-ink',
     );
 }
 

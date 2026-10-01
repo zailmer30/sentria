@@ -39,15 +39,7 @@ type Ordinance = {
     status: string;
     status_label: string | null;
     enacted_on: string | null;
-    approved_on: string | null;
-    vetoed_on?: string | null;
-    veto_overridden_on?: string | null;
     effectivity_date: string | null;
-    publication_date?: string | null;
-    publication_medium?: string | null;
-    sp_submitted_on?: string | null;
-    sp_reviewed_on?: string | null;
-    sp_result?: string | null;
     updated_at?: string | null;
     document: LinkedDocument | null;
     signed_copy: SignedCopy | null;
@@ -65,6 +57,7 @@ type Props = {
     publication: PublicationSummary | null;
     history: HistoryEvent[];
     can: { update: boolean; createPublication: boolean };
+    signedCopyRequiresConfirmation?: boolean;
 };
 
 const cardClass = 'overflow-hidden rounded-md border border-line bg-surface shadow-sm';
@@ -72,7 +65,13 @@ const cardClass = 'overflow-hidden rounded-md border border-line bg-surface shad
 const heroButtonClass =
     'border-transparent bg-surface text-ink shadow-none hover:bg-canvas-sunk hover:text-ink';
 
-export default function OrdinancesShow({ ordinance, publication, history = [], can }: Props) {
+export default function OrdinancesShow({
+    ordinance,
+    publication,
+    history = [],
+    can,
+    signedCopyRequiresConfirmation = false,
+}: Props) {
     const { t } = useTranslations();
     const { formatDate } = useFormatters();
     const statusLabel = t(`legislation.status_${ordinance.status}`);
@@ -224,6 +223,7 @@ export default function OrdinancesShow({ ordinance, publication, history = [], c
                             recordId={ordinance.id}
                             signedCopy={ordinance.signed_copy}
                             canManage={can.update}
+                            requiresUnpublishConfirmation={signedCopyRequiresConfirmation}
                             className={cardClass}
                         />
 
@@ -249,49 +249,9 @@ export default function OrdinancesShow({ ordinance, publication, history = [], c
                                     <CitationRow label={t('legislation.enacted_on')} numeric>
                                         {formatDate(ordinance.enacted_on)}
                                     </CitationRow>
-                                    {ordinance.approved_on ? (
-                                        <CitationRow label={t('legislation.approved_on')} numeric>
-                                            {formatDate(ordinance.approved_on)}
-                                        </CitationRow>
-                                    ) : null}
-                                    {ordinance.vetoed_on ? (
-                                        <CitationRow label={t('legislation.vetoed_on')} numeric>
-                                            {formatDate(ordinance.vetoed_on)}
-                                        </CitationRow>
-                                    ) : null}
-                                    {ordinance.veto_overridden_on ? (
-                                        <CitationRow label={t('legislation.veto_overridden_on')} numeric>
-                                            {formatDate(ordinance.veto_overridden_on)}
-                                        </CitationRow>
-                                    ) : null}
                                     <CitationRow label={t('legislation.effectivity_date')} numeric>
                                         {formatDate(ordinance.effectivity_date)}
                                     </CitationRow>
-                                    {ordinance.publication_date ? (
-                                        <CitationRow label={t('legislation.publication_date')} numeric>
-                                            {formatDate(ordinance.publication_date)}
-                                        </CitationRow>
-                                    ) : null}
-                                    {ordinance.publication_medium ? (
-                                        <CitationRow label={t('legislation.publication_medium')}>
-                                            {ordinance.publication_medium}
-                                        </CitationRow>
-                                    ) : null}
-                                    {ordinance.sp_submitted_on ? (
-                                        <CitationRow label={t('legislation.sp_submitted_on')} numeric>
-                                            {formatDate(ordinance.sp_submitted_on)}
-                                        </CitationRow>
-                                    ) : null}
-                                    {ordinance.sp_reviewed_on ? (
-                                        <CitationRow label={t('legislation.sp_reviewed_on')} numeric>
-                                            {formatDate(ordinance.sp_reviewed_on)}
-                                        </CitationRow>
-                                    ) : null}
-                                    {ordinance.sp_result ? (
-                                        <CitationRow label={t('legislation.sp_result')}>
-                                            {t(`legislation.sp_result_${ordinance.sp_result}`)}
-                                        </CitationRow>
-                                    ) : null}
                                 </dl>
                             </PanelBody>
                             <div className="border-t border-line px-6 py-3.5">
@@ -406,13 +366,7 @@ function nextOrdinanceMilestone(
 }
 
 function citationCode(ordinance: Ordinance): string {
-    const number = ordinance.ordinance_number.trim();
-
-    if (/^ord\b/i.test(number)) {
-        return number;
-    }
-
-    return `ORD-${ordinance.series_year}-${number}`;
+    return ordinance.ordinance_number.trim();
 }
 
 function StatusFact({

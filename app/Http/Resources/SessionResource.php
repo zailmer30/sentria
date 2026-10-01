@@ -6,23 +6,26 @@ use App\Enums\SessionType;
 use App\Models\AgendaItem;
 use App\Models\Bookmark;
 use App\Models\Committee;
+use App\Models\CommitteeReport;
 use App\Models\Document;
 use App\Models\FloorRecognitionRequest;
 use App\Models\LegislativeSession;
+use App\Models\MinutesCorrection;
 use App\Models\Motion;
 use App\Models\PrivateNote;
 use App\Models\SessionAttendance;
+use App\Models\SessionGuest;
 use App\Models\User;
 use App\Models\Vote;
 use App\Services\Documents\DocumentAccessService;
 use App\Services\Sessions\AgendaService;
 use App\Services\Sessions\AttendanceService;
 use App\Services\Sessions\CalendarRoutingService;
+use App\Services\Sessions\CommitteeHourService;
 use App\Services\Sessions\FloorRecognitionService;
+use App\Services\Sessions\FloorReferralService;
 use App\Services\Sessions\QuorumService;
 use App\Services\Sessions\VotingService;
-use App\States\Document\AgendaInclusion;
-use App\States\Document\ReadingDeliberation;
 use App\States\Session\DocumentsDistributed;
 use App\States\Session\InSession;
 use App\States\Session\Scheduled;
@@ -58,9 +61,14 @@ class SessionResource
     /**
      * @return array<string, mixed>
      */
-    public static function detail(LegislativeSession $session): array
+    public static function detail(LegislativeSession $session, ?User $viewer = null): array
     {
-        $session->loadMissing(['agendaItems.document.currentVersion', 'presidingOfficer', 'secretary']);
+        $session->loadMissing([
+            'agendaItems.document.currentVersion',
+            'agendaItems.minutesCorrections.recorder',
+            'presidingOfficer',
+            'secretary',
+        ]);
 
         return [
             ...self::summary($session),
@@ -76,15 +84,14 @@ class SessionResource
             'quorum_required' => $session->quorum_required,
             'is_public' => $session->is_public,
             'recording_enabled' => (bool) $session->recording_enabled,
+            'defer_heading_votes' => (bool) $session->defer_heading_votes,
             'capture_mode' => $session->chamberFeed()->value,
             'notes' => $session->notes,
             'secretariat_minutes' => $session->secretariat_minutes,
             'presiding_officer_id' => $session->presiding_officer_id,
             'secretary_id' => $session->secretary_id,
             'advance_blocked_reason' => app(AgendaService::class)->advanceBlockedReason($session),
-            'agenda_items' => $session->agendaItems->map(function (AgendaItem $item) use ($session): array {
-                $viewer = request()->user();
-
+            'agenda_items' => $session->agendaItems->map(function (AgendaItem $item) use ($session, $viewer): array {
                 return self::agendaItem($item, $session, $viewer instanceof User ? $viewer : null);
             })->values()->all(),
         ];
@@ -125,6 +132,13 @@ class SessionResource
             'can_third_reading' => false,
             'placed_on_third_reading' => false,
             'carried_to' => null,
+            'committee_hour_action' => null,
+            'can_record_committee_hour_motion' => false,
+            'committee_hour_recommendation' => null,
+            'committee_report' => null,
+            'minutes_corrections' => $item->relationLoaded('minutesCorrections')
+                ? $item->minutesCorrections->map(fn (MinutesCorrection $row): array => self::minutesCorrection($row))->values()->all()
+                : [],
         ];
 
         if ($session instanceof LegislativeSession && $viewer instanceof User) {
@@ -135,9 +149,31 @@ class SessionResource
             $payload['can_third_reading'] = $flags['can_third_reading'];
             $payload['placed_on_third_reading'] = $flags['placed_on_third_reading'];
             $payload['carried_to'] = $flags['carried_to'];
+            $hour = app(CommitteeHourService::class)->disposition($session, $item, $viewer);
+            $payload['committee_hour_action'] = $hour['action'];
+            $payload['can_record_committee_hour_motion'] = $hour['can_record'];
+            $payload['committee_hour_recommendation'] = $hour['recommendation'];
+            $payload['committee_report'] = self::committeeHourReport($session, $item, $viewer);
         }
 
         return $payload;
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    public static function minutesCorrection(MinutesCorrection $correction): array
+    {
+        return [
+            'id' => $correction->getKey(),
+            'agenda_item_id' => $correction->agenda_item_id,
+            'as_written' => $correction->as_written,
+            'should_read' => $correction->should_read,
+            'page_number' => $correction->page_number,
+            'recorded_by' => $correction->recorder?->display_name,
+            'applied_at' => $correction->applied_at?->toIso8601String(),
+            'created_at' => $correction->created_at?->toIso8601String(),
+        ];
     }
 
     /**
@@ -158,6 +194,20 @@ class SessionResource
             'checked_in_at' => $record->checked_in_at?->toIso8601String(),
             'checked_out_at' => $record->checked_out_at?->toIso8601String(),
             'remarks' => $record->remarks,
+        ];
+    }
+
+    /**
+     * @return array{id: string, name: string, organization: string|null, speaking_topic: string|null, status: string}
+     */
+    public static function guest(SessionGuest $guest): array
+    {
+        return [
+            'id' => (string) $guest->getKey(),
+            'name' => $guest->name,
+            'organization' => $guest->organization,
+            'speaking_topic' => $guest->speaking_topic,
+            'status' => $guest->status,
         ];
     }
 
@@ -205,6 +255,9 @@ class SessionResource
             'agendaItems.document.currentVersion',
             'agendaItems.document.author',
             'agendaItems.document.committee',
+            'agendaItems.document.referrals.committee',
+            'agendaItems.document.subjectReports.submitter',
+            'agendaItems.minutesCorrections.recorder',
             'presidingOfficer',
             'secretary',
             'attendance.user',
@@ -225,7 +278,7 @@ class SessionResource
         }
 
         $current = $agenda->currentItem($session);
-        $next = $agenda->nextPendingItem($session);
+        $next = $agenda->nextItemAfterAdvance($session, $current);
         $previous = $agenda->previousCompletedItem($session);
 
         $documentIds = $session->agendaItems->pluck('document_id')->filter()->values();
@@ -338,7 +391,13 @@ class SessionResource
             'reading_pack' => $session->agendaItems
                 ->sortBy('position')
                 ->values()
-                ->map(fn (AgendaItem $item): array => self::readingPackItem($item, $viewer, $access, $session, $current))
+                ->map(fn (AgendaItem $item): array => self::readingPackItem($item, $viewer, $access, $session))
+                ->all(),
+            'minutes_corrections' => $session->agendaItems
+                ->flatMap(fn (AgendaItem $item) => $item->minutesCorrections)
+                ->sortBy('created_at')
+                ->values()
+                ->map(fn (MinutesCorrection $row): array => self::minutesCorrection($row))
                 ->all(),
             'committees' => $viewer->can('documents.refer')
                 ? Committee::query()
@@ -394,6 +453,11 @@ class SessionResource
                     && $session->status instanceof InSession,
                 'cast_vote' => $viewer->can('castVote', $session)
                     && $session->status instanceof InSession,
+                'update_voting_mode' => $viewer->can('updateVotingMode', $session)
+                    && ($session->status instanceof InSession || $session->status instanceof Suspended),
+                'begin_heading_votes' => $viewer->can('agenda.manage')
+                    && ($session->status instanceof InSession || $session->status instanceof Suspended)
+                    && $agenda->canBeginHeadingVotes($session, $current),
                 'control_hall_display' => $viewer->can('controlHallDisplay', $session),
                 'refer' => $viewer->can('documents.refer')
                     && $session->status instanceof InSession,
@@ -402,8 +466,10 @@ class SessionResource
                     $viewer->can('create', Motion::class) || $viewer->can('agenda.manage')
                 ) && $recognized !== null
                     && ($session->status instanceof InSession || $session->status instanceof Suspended),
-                'manage_recording' => $viewer->can('manageRecording', $session),
                 'record_minutes' => $viewer->can('recordMinutes', $session),
+                'record_minutes_corrections' => $viewer->can('agenda.manage')
+                    && ($session->status instanceof InSession || $session->status instanceof Suspended),
+                'apply_minutes_corrections' => $viewer->can('agenda.manage'),
             ],
         ];
     }
@@ -456,9 +522,14 @@ class SessionResource
         User $viewer,
         DocumentAccessService $access,
         ?LegislativeSession $session = null,
-        ?AgendaItem $current = null,
     ): array {
-        $item->loadMissing(['document.currentVersion', 'document.author', 'document.committee']);
+        $item->loadMissing([
+            'document.currentVersion',
+            'document.author',
+            'document.committee',
+            'document.referrals.committee',
+            'document.subjectReports.submitter',
+        ]);
 
         $documentPayload = null;
         $document = $item->document;
@@ -473,10 +544,11 @@ class SessionResource
                 'document_type_label' => $document->document_type->label(),
                 'status' => $document->status->getValue(),
                 'status_label' => $document->status->label(),
-                'author' => $document->author?->display_name,
+                'author' => $document->authorName(),
                 'abstract' => $document->abstract,
                 'committee_id' => $document->committee_id,
                 'committee' => $document->committee?->name,
+                'open_referral' => DocumentResource::openReferral($document),
                 ...self::documentPreview($document, $viewer, $access),
             ];
         }
@@ -494,13 +566,20 @@ class SessionResource
             'voting_open' => $item->voting_open_at !== null,
             'reading_number' => $item->reading_number,
             'title_only' => $item->reading_number === 1,
-            'can_refer' => $session !== null && self::canReferFromFloor($item, $viewer, $session, $current),
+            'can_refer' => $session !== null && app(FloorReferralService::class)->allowsRefer($session, $item, $viewer),
+            'can_edit_referral' => $session !== null && app(FloorReferralService::class)->allowsEdit($session, $item, $viewer),
             'can_second_reading' => false,
             'can_postpone' => false,
             'can_undo' => false,
             'can_third_reading' => false,
             'placed_on_third_reading' => false,
             'carried_to' => null,
+            'committee_hour_action' => null,
+            'can_record_committee_hour_motion' => false,
+            'committee_hour_recommendation' => null,
+            'committee_report' => $session !== null && $documentPayload !== null
+                ? self::committeeHourReport($session, $item, $viewer)
+                : null,
             'document' => $documentPayload,
         ];
 
@@ -512,6 +591,10 @@ class SessionResource
             $payload['can_third_reading'] = $flags['can_third_reading'];
             $payload['placed_on_third_reading'] = $flags['placed_on_third_reading'];
             $payload['carried_to'] = $flags['carried_to'];
+            $hour = app(CommitteeHourService::class)->disposition($session, $item, $viewer);
+            $payload['committee_hour_action'] = $hour['action'];
+            $payload['can_record_committee_hour_motion'] = $hour['can_record'];
+            $payload['committee_hour_recommendation'] = $hour['recommendation'];
         }
 
         return $payload;
@@ -598,34 +681,6 @@ class SessionResource
         ];
     }
 
-    private static function canReferFromFloor(
-        AgendaItem $item,
-        User $viewer,
-        LegislativeSession $session,
-        ?AgendaItem $current,
-    ): bool {
-        if (! $viewer->can('documents.refer') || ! $session->status instanceof InSession) {
-            return false;
-        }
-
-        if ($current === null || $current->getKey() !== $item->getKey()) {
-            return false;
-        }
-
-        if ($item->reading_number !== 1) {
-            return false;
-        }
-
-        $document = $item->document;
-
-        if ($document === null || (int) ($document->current_reading ?? 1) !== 1) {
-            return false;
-        }
-
-        return $document->status instanceof AgendaInclusion
-            || $document->status instanceof ReadingDeliberation;
-    }
-
     /**
      * @return array<string, mixed>
      */
@@ -661,6 +716,20 @@ class SessionResource
                 'rule' => $canRule,
             ],
         ];
+    }
+
+    /**
+     * @return array<string, mixed>|null
+     */
+    private static function committeeHourReport(LegislativeSession $session, AgendaItem $item, User $viewer): ?array
+    {
+        $report = app(CommitteeHourService::class)->floorReport($session, $item);
+
+        if (! $report instanceof CommitteeReport || ! $viewer->can('view', $report)) {
+            return null;
+        }
+
+        return DocumentResource::floorReport($report);
     }
 
     /**

@@ -55,6 +55,7 @@ export function subscribeToSession(
     handlers: {
         onSessionState?: (payload: Record<string, unknown>) => void;
         onAttendance?: (payload: Record<string, unknown>) => void;
+        onGuests?: (payload: Record<string, unknown>) => void;
         onMotion?: (payload: Record<string, unknown>) => void;
         onVotingOpened?: (payload: Record<string, unknown>) => void;
         onVoteCast?: (payload: Record<string, unknown>) => void;
@@ -63,6 +64,7 @@ export function subscribeToSession(
         onHallDisplay?: (payload: Record<string, unknown>) => void;
         onHallDisplayView?: (payload: Record<string, unknown>) => void;
         onRecognition?: (payload: Record<string, unknown>) => void;
+        onMinutesCorrections?: (payload: Record<string, unknown>) => void;
     },
 ): () => void {
     const echo = getEcho();
@@ -78,6 +80,9 @@ export function subscribeToSession(
     }
     if (handlers.onAttendance) {
         channel.listen('.AttendanceUpdated', handlers.onAttendance);
+    }
+    if (handlers.onGuests) {
+        channel.listen('.SessionGuestsUpdated', handlers.onGuests);
     }
     if (handlers.onMotion) {
         channel.listen('.MotionRecorded', handlers.onMotion);
@@ -103,6 +108,9 @@ export function subscribeToSession(
     if (handlers.onRecognition) {
         channel.listen('.FloorRecognitionUpdated', handlers.onRecognition);
     }
+    if (handlers.onMinutesCorrections) {
+        channel.listen('.MinutesCorrectionsChanged', handlers.onMinutesCorrections);
+    }
 
     return () => {
         echo.leave(`session.${sessionId}`);
@@ -119,6 +127,13 @@ export type TranscriptSegment = {
     text: string;
     confidence?: number | null;
     language?: string | null;
+    original_text?: string;
+    original_speaker?: string | null;
+    original_speaker_id?: string | null;
+    original_attributed?: boolean;
+    is_edited?: boolean;
+    edited_at?: string | null;
+    edited_by?: string | null;
 };
 
 export function sortTranscriptSegments(segments: TranscriptSegment[]): TranscriptSegment[] {
@@ -175,5 +190,128 @@ export function subscribeToTranscript(
 
     return () => {
         echo.leave(`session-transcript.${sessionId}`);
+    };
+}
+
+export type SessionChatMessage = {
+    id: string;
+    user_id: string;
+    display_name: string | null;
+    body: string;
+    created_at: string | null;
+};
+
+export type SessionChatParticipant = {
+    id: string;
+    display_name: string | null;
+    is_clerk: boolean;
+    last_read_at?: string | null;
+};
+
+export type SessionChatPerson = {
+    id: string;
+    display_name: string;
+    is_clerk: boolean;
+    is_designated_secretary?: boolean;
+};
+
+export type SessionChatConversation = {
+    id: string;
+    type: 'direct' | 'group';
+    name: string | null;
+    title: string;
+    created_by: string;
+    is_creator: boolean;
+    participants: SessionChatParticipant[];
+    last_message: {
+        id: string;
+        user_id: string;
+        body: string;
+        created_at: string | null;
+    } | null;
+    last_message_at: string | null;
+    unread_count: number;
+    messages?: SessionChatMessage[];
+};
+
+export type SessionChatReadReceipt = {
+    conversation_id: string;
+    session_id: string;
+    user_id: string;
+    last_read_at: string | null;
+};
+
+export function subscribeToSessionChatInbox(
+    userId: string,
+    onUpdate: (payload: { conversation_id: string; session_id: string }) => void,
+): () => void {
+    const echo = getEcho();
+
+    if (!echo) {
+        return () => undefined;
+    }
+
+    const channel = echo.private(`App.Models.User.${userId}`);
+
+    const handler = (payload: Record<string, unknown>) => {
+        onUpdate({
+            conversation_id: String(payload.conversation_id ?? ''),
+            session_id: String(payload.session_id ?? ''),
+        });
+    };
+
+    channel.listen('.SessionChatInboxUpdated', handler);
+
+    return () => {
+        channel.stopListening('.SessionChatInboxUpdated', handler);
+    };
+}
+
+export function subscribeToSessionChatThread(
+    conversationId: string,
+    handlers: {
+        onMessage: (payload: { conversation_id: string; session_id: string; message: SessionChatMessage }) => void;
+        onRead?: (payload: SessionChatReadReceipt) => void;
+    },
+): () => void {
+    const echo = getEcho();
+
+    if (!echo) {
+        return () => undefined;
+    }
+
+    const channel = echo.private(`session-chat.${conversationId}`);
+
+    const messageHandler = (payload: Record<string, unknown>) => {
+        const message = payload.message as SessionChatMessage | undefined;
+
+        if (!message?.id) {
+            return;
+        }
+
+        handlers.onMessage({
+            conversation_id: String(payload.conversation_id ?? conversationId),
+            session_id: String(payload.session_id ?? ''),
+            message,
+        });
+    };
+
+    channel.listen('.SessionChatMessageSent', messageHandler);
+
+    const readHandler = (payload: Record<string, unknown>) => {
+        handlers.onRead?.({
+            conversation_id: String(payload.conversation_id ?? conversationId),
+            session_id: String(payload.session_id ?? ''),
+            user_id: String(payload.user_id ?? ''),
+            last_read_at: typeof payload.last_read_at === 'string' ? payload.last_read_at : null,
+        });
+    };
+
+    if (handlers.onRead) {
+        channel.listen('.SessionChatRead', readHandler);
+    }
+
+    return () => {
+        echo.leave(`session-chat.${conversationId}`);
     };
 }

@@ -47,6 +47,19 @@ it('exposes secretariat minutes on the floor console', function (): void {
             ->where('can.record_minutes', true));
 });
 
+it('opens the recording floor view for the secretariat', function (): void {
+    $secretariat = floorMinutesActor(UserRole::Secretariat, 'recording');
+    $session = LegislativeSession::factory()->inSession()->create();
+
+    $this->actingAs($secretariat)
+        ->get(route('sessions.floor.recording', $session))
+        ->assertOk()
+        ->assertInertia(fn (Assert $page) => $page
+            ->component('Sessions/Floor/Secretariat')
+            ->where('workspace', 'recording')
+            ->where('can.view_transcript', true));
+});
+
 it('opens the minutes floor view for the secretariat', function (): void {
     $secretariat = floorMinutesActor(UserRole::Secretariat, 'view');
     $session = LegislativeSession::factory()->inSession()->create([

@@ -2,6 +2,7 @@ import { MemberActionRail } from '@/components/session/MemberActionRail';
 import { MemberAgendaRail } from '@/components/session/MemberAgendaRail';
 import { FloorRecognitionDock, MemberRaiseMotionButton } from '@/components/session/FloorRecognitionDock';
 import { MemberReadingPane } from '@/components/session/MemberReadingPane';
+import { MinutesCorrectionsPanel } from '@/components/session/MinutesCorrectionsPanel';
 import { SessionAssistantPanel, type SessionAssistantData } from '@/components/session/SessionAssistantPanel';
 import { VoteBoard } from '@/components/session/VoteBoard';
 import { Button } from '@/components/ui/button';
@@ -41,6 +42,7 @@ const MEMBER_ECHO_PROPS = [
     'document_link',
     'reading_pack',
     'private_notes',
+    'minutes_corrections',
 ];
 
 function initialSelectedId(
@@ -69,6 +71,7 @@ export default function BoardMemberFloor({
     can,
     recognition = { pending: [], recognized: null },
     assistant = null,
+    minutes_corrections = [],
 }: BoardMemberFloorProps) {
     const { t } = useTranslations();
     const { auth } = usePage<PageProps>().props;
@@ -245,6 +248,17 @@ export default function BoardMemberFloor({
                                 </>
                             }
                         />
+
+                        {selectedItem?.category === 'approval-minutes' && selectedItem.document ? (
+                            <MinutesCorrectionsPanel
+                                sessionId={session.id}
+                                agendaItemId={selectedItem.id}
+                                corrections={minutes_corrections}
+                                t={t}
+                                compact
+                                className="shrink-0"
+                            />
+                        ) : null}
 
                         {showBallot ? (
                             <div className="flex min-h-0 shrink-0 flex-col gap-4">

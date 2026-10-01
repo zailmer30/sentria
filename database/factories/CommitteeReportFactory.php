@@ -25,7 +25,7 @@ class CommitteeReportFactory extends Factory
             'subject_document_id' => Document::factory(),
             'report_number' => sprintf('CR-%d-%03d', fake()->numberBetween(2024, 2026), fake()->unique()->numberBetween(1, 999)),
             'recommendation' => fake()->randomElement([
-                'approval', 'approval-with-amendments', 'disapproval', 'substitution', 'no-action',
+                'approve', 'amend', 'disapprove', 'defer', 'no-action',
             ]),
             'status' => 'draft',
             'findings' => fake()->paragraphs(2, true),

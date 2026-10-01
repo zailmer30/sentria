@@ -44,10 +44,6 @@ class UpdateResolutionRequest extends FormRequest
             'effectivity_date' => ['nullable', 'date'],
             'transmitted_on' => ['nullable', 'date'],
             'transmitted_to' => ['nullable', 'string', 'max:255'],
-            'lce_sp_required' => ['sometimes', 'boolean'],
-            'sp_submitted_on' => ['nullable', 'date'],
-            'sp_reviewed_on' => ['nullable', 'date'],
-            'sp_result' => ['nullable', 'string', Rule::in(['consistent', 'invalid', 'presumed'])],
         ];
     }
 

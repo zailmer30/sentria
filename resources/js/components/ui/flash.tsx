@@ -42,6 +42,7 @@ export function FlashRegion(_props: { className?: string }) {
 
     const success = flash?.success ?? null;
     const error = flash?.error ?? null;
+    const errorReplacements = flash?.error_replacements ?? null;
 
     useEffect(() => {
         const message = success ?? error;
@@ -54,7 +55,7 @@ export function FlashRegion(_props: { className?: string }) {
 
         // Inertia re-shares flash props on partial reloads; a message is a
         // receipt for one event and must be announced exactly once.
-        const signature = `${success ? 'success' : 'error'}:${message}`;
+        const signature = `${success ? 'success' : 'error'}:${message}:${JSON.stringify(errorReplacements ?? {})}`;
 
         if (announced.current === signature) {
             return;
@@ -69,9 +70,9 @@ export function FlashRegion(_props: { className?: string }) {
         }
 
         if (error) {
-            notifyError(t(error));
+            notifyError(t(error, errorReplacements ?? {}));
         }
-    }, [success, error]);
+    }, [success, error, errorReplacements, t]);
 
     return null;
 }

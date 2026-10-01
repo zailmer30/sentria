@@ -41,15 +41,7 @@ class UpdateOrdinanceRequest extends FormRequest
             'status' => ['required', 'string', Rule::in(['draft', 'pending', 'enacted', 'vetoed', 'repealed'])],
             'enacted_on' => ['nullable', 'date'],
             'approving_authority' => ['nullable', 'string', 'max:255'],
-            'approved_on' => ['nullable', 'date'],
-            'vetoed_on' => ['nullable', 'date'],
-            'veto_overridden_on' => ['nullable', 'date'],
             'effectivity_date' => ['nullable', 'date'],
-            'publication_date' => ['nullable', 'date'],
-            'publication_medium' => ['nullable', 'string', 'max:255'],
-            'sp_submitted_on' => ['nullable', 'date'],
-            'sp_reviewed_on' => ['nullable', 'date'],
-            'sp_result' => ['nullable', 'string', Rule::in(['consistent', 'invalid', 'presumed'])],
         ];
     }
 

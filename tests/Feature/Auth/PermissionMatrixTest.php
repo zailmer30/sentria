@@ -43,6 +43,7 @@ it('allows board members to vote but not manage users', function (): void {
     $member = userWithRole(UserRole::BoardMember);
 
     expect($member->can('voting.cast'))->toBeTrue()
+        ->and($member->can('session-chat.use'))->toBeTrue()
         ->and($member->can('documents.create'))->toBeTrue()
         ->and($member->can('users.create'))->toBeFalse()
         ->and($member->can('settings.update'))->toBeFalse();
@@ -58,7 +59,8 @@ it('allows secretariat to register documents but not cast votes', function (): v
         ->and($secretariat->can('voting.cast'))->toBeFalse()
         ->and($secretariat->can('sessions.start'))->toBeTrue()
         ->and($secretariat->can('sessions.suspend'))->toBeTrue()
-        ->and($secretariat->can('sessions.adjourn'))->toBeTrue();
+        ->and($secretariat->can('sessions.adjourn'))->toBeTrue()
+        ->and($secretariat->can('session-chat.use'))->toBeTrue();
 });
 
 it('allows the presiding officer to adjourn and rule, but not start sittings', function (): void {

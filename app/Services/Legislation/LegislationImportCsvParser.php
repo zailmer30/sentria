@@ -152,12 +152,6 @@ class LegislationImportCsvParser
             }
         }
 
-        $spResult = $mapped['sp_result'] ?? '';
-
-        if ($spResult !== '' && ! in_array($spResult, ['consistent', 'invalid', 'presumed'], true)) {
-            return 'sp_result';
-        }
-
         return null;
     }
 
@@ -187,15 +181,11 @@ class LegislationImportCsvParser
 
         if ($kind === LegislationKind::Ordinance) {
             $fields['approving_authority'] = $this->nullable($mapped['approving_authority'] ?? '');
-            $fields['publication_medium'] = $this->nullable($mapped['publication_medium'] ?? '');
-            $fields['sp_result'] = $this->nullable($mapped['sp_result'] ?? '');
         }
 
         if ($kind === LegislationKind::Resolution) {
             $fields['category'] = $this->nullable($mapped['category'] ?? '');
             $fields['transmitted_to'] = $this->nullable($mapped['transmitted_to'] ?? '');
-            $fields['lce_sp_required'] = $this->nullable($mapped['lce_sp_required'] ?? '');
-            $fields['sp_result'] = $this->nullable($mapped['sp_result'] ?? '');
         }
 
         return $fields;
@@ -209,20 +199,12 @@ class LegislationImportCsvParser
         return match ($kind) {
             LegislationKind::Ordinance => [
                 'enacted_on',
-                'approved_on',
-                'vetoed_on',
-                'veto_overridden_on',
                 'effectivity_date',
-                'publication_date',
-                'sp_submitted_on',
-                'sp_reviewed_on',
             ],
             LegislationKind::Resolution => [
                 'adopted_on',
                 'effectivity_date',
                 'transmitted_on',
-                'sp_submitted_on',
-                'sp_reviewed_on',
             ],
         };
     }

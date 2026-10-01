@@ -13,7 +13,7 @@ class DatabaseSeeder extends Seeder
             PermissionMatrixSeeder::class,
             UserSeeder::class,
             // SystemSettingSeeder::class,
-            // CommitteeSeeder::class,
+            CommitteeSeeder::class,
             // LegislativeContentSeeder::class,
             // AiDemoSeeder::class,
         ]);

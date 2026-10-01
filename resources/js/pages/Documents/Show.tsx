@@ -28,6 +28,7 @@ import {
     FileText,
     GitCompare,
     History,
+    Info,
     Link2,
     Pencil,
     Scale,
@@ -70,7 +71,11 @@ type OpenReferral = {
     id: string;
     committee_id: string;
     committee: string | null;
+    committee_ids?: string[];
+    committees?: string[];
     status: string;
+    meeting_on?: string | null;
+    remarks?: string | null;
 };
 
 type DocumentReport = {
@@ -111,11 +116,11 @@ type DocumentDetail = {
     sealed_at?: string | null;
     is_measure?: boolean;
     enacting_clause?: string | null;
-    proposed_effectivity?: number | null;
     explanatory_note?: string | null;
     current_reading?: number | null;
     return_reason?: string | null;
     returned_at?: string | null;
+    on_session?: boolean;
     versions: Version[];
     grants: Grant[];
     transitions: Transition[];
@@ -168,6 +173,7 @@ type Props = {
     grantable_roles?: GrantableRole[];
     publication?: { public_slug: string; title: string; status: string } | null;
     history?: HistoryEvent[];
+    nextReportNumber?: string | null;
     can: {
         update: boolean;
         delete: boolean;
@@ -182,13 +188,15 @@ type Props = {
         consistency: boolean;
         createPublication?: boolean;
         createReport?: boolean;
+        submitReport?: boolean;
+        editReferral?: boolean;
         seal?: boolean;
     };
     aiSummary: AiSummary | null;
 };
 
 const navyButtonClass =
-    'border-[var(--color-floor-plate)] bg-[var(--color-floor-plate)] text-[var(--color-floor-ink)] shadow-none hover:border-[rgb(24,41,74)] hover:bg-[rgb(24,41,74)]';
+    'border-[var(--color-floor-plate)] bg-[var(--color-floor-plate)] text-[var(--color-floor-ink)] shadow-none hover:border-floor-plate-hover hover:bg-floor-plate-hover';
 
 const cardClass = 'overflow-hidden rounded-[8px] shadow-[0_1px_2px_rgb(15_27_61/0.06)]';
 
@@ -351,6 +359,7 @@ export default function DocumentsShow({
     grantable_roles = [],
     publication = null,
     history = [],
+    nextReportNumber = null,
     can,
     aiSummary: initialSummary,
 }: Props) {
@@ -496,6 +505,8 @@ export default function DocumentsShow({
     const openReferral = document.open_referral ?? null;
     const reports = document.reports ?? [];
     const canDraftReport = Boolean(can.createReport && openReferral);
+    const canFileReport = Boolean(can.submitReport && openReferral);
+    const canEditReferral = Boolean(can.editReferral && openReferral);
     const canArchiveNow =
         Boolean(can.archive) &&
         (document.transitions.some((item) => item.to === 'archive') ||
@@ -504,8 +515,9 @@ export default function DocumentsShow({
     const recordId = document.reference_number ?? document.tracking_number;
     const confidentialityLabel = t(`documents.confidentiality_${document.confidentiality}`);
     const isSecretariatHold = document.status === 'submitted' || document.status === 'secretariat-review';
-    const waitingForAgenda = document.status === 'agenda-inclusion' && document.transitions.length === 0;
-    const showActionBanner = hasWorkflow || canDraftReport || isSecretariatHold || waitingForAgenda;
+    const waitingForAgenda =
+        document.status === 'agenda-inclusion' && document.transitions.length === 0 && !document.on_session;
+    const showActionBanner = hasWorkflow || canDraftReport || canEditReferral || isSecretariatHold || waitingForAgenda;
 
     function submitReportForReview(reportId: string) {
         router.post(`/reports/${reportId}/submit-for-review`, {}, { preserveScroll: true, onError: toastFormErrors });
@@ -525,14 +537,6 @@ export default function DocumentsShow({
         }
 
         router.post(`/reports/${reportId}/submit`, {}, { preserveScroll: true, onError: toastFormErrors });
-    }
-
-    function adoptReport(reportId: string) {
-        if (!window.confirm(t('committees.adopt_report_confirm'))) {
-            return;
-        }
-
-        router.post(`/reports/${reportId}/adopt`, {}, { preserveScroll: true, onError: toastFormErrors });
     }
 
     function slugKey(value: string): string {
@@ -569,10 +573,10 @@ export default function DocumentsShow({
 
     const tabClass = (active: boolean) =>
         cn(
-            '-mb-px inline-flex items-center border-b-2 px-1 pb-2.5 text-sm transition-colors',
+            'inline-flex h-7 items-center rounded-[6px] px-3 text-sm transition-all',
             active
-                ? 'border-accent font-medium text-accent'
-                : 'border-transparent text-ink-muted hover:text-ink',
+                ? 'bg-surface font-medium text-ink shadow-[0_1px_2px_rgb(15_27_61/0.08),0_0_0_1px_rgb(15_27_61/0.04)]'
+                : 'text-ink-muted hover:text-ink',
         );
 
     return (
@@ -628,14 +632,17 @@ export default function DocumentsShow({
                                     onClick={() => setReportOpen(true)}
                                 >
                                     <FileText aria-hidden="true" strokeWidth={1.75} />
-                                    {t('documents.draft_report')}
+                                    {t(canFileReport ? 'committees.submit_report' : 'documents.draft_report')}
                                 </Button>
                             ) : null}
                         </div>
                     </div>
 
-                    <div className="flex flex-wrap items-end justify-between gap-x-4 gap-y-2 border-b border-line">
-                        <nav aria-label={t('documents.record_tabs')} className="flex flex-wrap items-center gap-5">
+                    <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-3 border-b border-line pb-4">
+                        <nav
+                            aria-label={t('documents.record_tabs')}
+                            className="inline-flex items-center gap-0.5 rounded-[8px] border border-line bg-surface-alt p-0.5"
+                        >
                             <span className={tabClass(true)}>{t('documents.view_source')}</span>
                             {publication ? (
                                 <Link href={`/publications/${publication.public_slug}`} className={tabClass(false)}>
@@ -648,9 +655,9 @@ export default function DocumentsShow({
                             )}
                         </nav>
 
-                        <div className="flex flex-wrap items-center gap-2 pb-2">
+                        <div className="inline-flex flex-wrap items-center gap-0.5 rounded-[8px] border border-line bg-surface p-0.5 shadow-[0_1px_2px_rgb(15_27_61/0.05)]">
                             {can.download && currentVersion ? (
-                                <Button variant="secondary" size="sm" asChild>
+                                <Button variant="ghost" size="sm" className="h-7 rounded-[6px] font-medium" asChild>
                                     <a href={`/documents/${document.slug}/versions/${currentVersion.id}/download`}>
                                         <Download aria-hidden="true" strokeWidth={1.75} />
                                         {t('documents.download')}
@@ -658,14 +665,20 @@ export default function DocumentsShow({
                                 </Button>
                             ) : null}
                             {can.update ? (
-                                <Button variant="secondary" size="sm" asChild>
+                                <Button variant="ghost" size="sm" className="h-7 rounded-[6px] font-medium" asChild>
                                     <Link href={`/documents/${document.slug}/edit`}>
                                         <Pencil aria-hidden="true" strokeWidth={1.75} />
                                         {t('documents.edit')}
                                     </Link>
                                 </Button>
                             ) : null}
-                            <Button type="button" variant="secondary" size="sm" onClick={() => void copyLink()}>
+                            <Button
+                                type="button"
+                                variant="ghost"
+                                size="sm"
+                                className="h-7 rounded-[6px] font-medium"
+                                onClick={() => void copyLink()}
+                            >
                                 <Link2 aria-hidden="true" strokeWidth={1.75} />
                                 {t('documents.copy_link')}
                             </Button>
@@ -676,9 +689,13 @@ export default function DocumentsShow({
                 <ReferToCommitteeDialog
                     documentSlug={document.slug}
                     committeeId={document.committee_id}
+                    committeeIds={openReferral?.committee_ids}
+                    meetingOn={openReferral?.meeting_on}
+                    remarks={openReferral?.remarks}
                     committees={committees}
                     open={referOpen}
                     onOpenChange={setReferOpen}
+                    mode={canEditReferral ? 'edit' : 'create'}
                 />
 
                 <ReturnDocumentDialog
@@ -696,8 +713,10 @@ export default function DocumentsShow({
                 {openReferral ? (
                     <DraftReportDialog
                         referral={openReferral}
+                        nextReportNumber={nextReportNumber ?? ''}
                         open={reportOpen}
                         onOpenChange={setReportOpen}
+                        canFileNow={canFileReport}
                     />
                 ) : null}
 
@@ -723,14 +742,26 @@ export default function DocumentsShow({
                 ) : null}
 
                 {showActionBanner ? (
-                    <div className="flex flex-wrap items-center justify-between gap-3 rounded-[8px] border border-info-line bg-info-soft px-4 py-3">
-                        <p className="max-w-2xl text-sm text-info">
-                            {isSecretariatHold
-                                ? t('documents.secretariat_hold_notice', { status: document.status_label })
-                                : waitingForAgenda
-                                  ? t('documents.ready_for_agenda_hint')
-                                  : t('documents.advance_workflow_hint')}
-                        </p>
+                    <div className="flex flex-wrap items-center justify-between gap-4 rounded-[10px] border border-line bg-surface px-4 py-3.5 shadow-[0_1px_2px_rgb(15_27_61/0.06)]">
+                        <div className="flex min-w-0 flex-1 items-start gap-3.5">
+                            <span className="mt-0.5 flex size-9 shrink-0 items-center justify-center rounded-[8px] bg-info-soft text-info ring-1 ring-info-line ring-inset">
+                                <Info aria-hidden="true" className="size-[18px]" strokeWidth={1.75} />
+                            </span>
+                            <div className="min-w-0">
+                                <p className="text-2xs font-semibold tracking-[0.08em] text-info uppercase">
+                                    {t('documents.next_step')}
+                                </p>
+                                <p className="mt-0.5 max-w-2xl text-sm leading-relaxed text-ink-muted">
+                                    {isSecretariatHold
+                                        ? t('documents.secretariat_hold_notice', { status: document.status_label })
+                                        : waitingForAgenda
+                                          ? t('documents.ready_for_agenda_hint')
+                                          : canEditReferral && !hasWorkflow
+                                            ? t('documents.refer_edit_hint')
+                                            : t('documents.advance_workflow_hint')}
+                                </p>
+                            </div>
+                        </div>
                         <div className="flex flex-wrap items-center gap-2">
                             {waitingForAgenda ? (
                                 <Button variant="primary" size="sm" className={navyButtonClass} asChild>
@@ -752,6 +783,18 @@ export default function DocumentsShow({
                                     </Button>
                                 );
                             })}
+                            {canEditReferral ? (
+                                <Button
+                                    type="button"
+                                    variant={hasWorkflow ? 'secondary' : 'primary'}
+                                    size="sm"
+                                    className={hasWorkflow ? undefined : navyButtonClass}
+                                    onClick={() => setReferOpen(true)}
+                                >
+                                    <Pencil aria-hidden="true" strokeWidth={1.75} />
+                                    {t('documents.refer_edit')}
+                                </Button>
+                            ) : null}
                         </div>
                     </div>
                 ) : null}
@@ -853,7 +896,7 @@ export default function DocumentsShow({
                                             onClick={() => setReportOpen(true)}
                                         >
                                             <FileText aria-hidden="true" strokeWidth={1.75} />
-                                            {t('documents.draft_report')}
+                                            {t(canFileReport ? 'committees.submit_report' : 'documents.draft_report')}
                                         </Button>
                                     ) : null}
                                 </PanelHead>
@@ -925,16 +968,6 @@ export default function DocumentsShow({
                                                                     onClick={() => submitReport(report.id)}
                                                                 >
                                                                     {t('committees.submit_report')}
-                                                                </Button>
-                                                            ) : null}
-                                                            {report.can?.adopt ? (
-                                                                <Button
-                                                                    type="button"
-                                                                    size="sm"
-                                                                    className={navyButtonClass}
-                                                                    onClick={() => adoptReport(report.id)}
-                                                                >
-                                                                    {t('committees.adopt_report')}
                                                                 </Button>
                                                             ) : null}
                                                         </div>
@@ -1269,9 +1302,21 @@ export default function DocumentsShow({
                                     <FilingRow label={t('documents.author')}>
                                         {document.author ?? t('documents.no_author')}
                                     </FilingRow>
-                                    {document.committee ? (
+                                    {document.committee || (openReferral?.committees?.length ?? 0) > 0 ? (
                                         <FilingRow label={t('documents.committee')}>
-                                            {document.committee}
+                                            {(openReferral?.committees?.length ?? 0) > 0
+                                                ? openReferral?.committees?.join(', ')
+                                                : document.committee}
+                                        </FilingRow>
+                                    ) : null}
+                                    {openReferral?.meeting_on ? (
+                                        <FilingRow label={t('documents.refer_meeting_on')}>
+                                            {formatDate(openReferral.meeting_on)}
+                                        </FilingRow>
+                                    ) : null}
+                                    {openReferral?.remarks ? (
+                                        <FilingRow label={t('documents.refer_remarks')}>
+                                            {openReferral.remarks}
                                         </FilingRow>
                                     ) : null}
                                     <FilingRow label={t('documents.submitted_at')}>

@@ -83,13 +83,24 @@
     /* ---- Floor plate ----------------------------------------------------
        `bg-floor-plate` is the same deep navy in both themes — the chamber is
        dim in either case — so its foreground must not flip with the theme the
-       way `ink` and `accent-on` do. These are the only tones allowed on it. */
-    --color-floor-plate: rgb(19, 32, 66);
+       way `ink` and `accent-on` do. These are the only tones allowed on it.
+       The whole family is re-derived server-side when an administrator picks
+       a plate colour (`PlatePalette`), so every stop must be a token. */
+    --color-floor-plate: #132042;
+    --color-floor-plate-mid: #18294a;
+    --color-floor-plate-end: #1f3656;
+    --color-floor-plate-hover: #18294a;
     --color-floor-ink: #ffffff;
     --color-floor-ink-muted: #b4c2d8;
     --color-floor-ink-faint: #8494b0;
     --color-floor-line: rgb(255 255 255 / 0.14);
     --color-floor-sunk: rgb(255 255 255 / 0.06);
+
+    /* Secretariat desk: a warmer walk of the plate, used only on the home hero. */
+    --color-desk-plate: #0b2040;
+    --color-desk-plate-mid: #103058;
+    --color-desk-plate-end: #164476;
+    --color-desk-ring: #8ecae6;
 
     /* ---- Semantic states ------------------------------------------------ */
     --color-success: #16a34a;
@@ -425,13 +436,66 @@
 .login-brand {
     background-color: var(--login-brand-from);
     background-image:
-        linear-gradient(to right, var(--login-grid) 1px, transparent 1px),
-        linear-gradient(to bottom, var(--login-grid) 1px, transparent 1px),
+        var(
+            --plate-pattern,
+            linear-gradient(to right, var(--login-grid) 1px, transparent 1px),
+            linear-gradient(to bottom, var(--login-grid) 1px, transparent 1px)
+        ),
         linear-gradient(to right, var(--login-brand-from), var(--login-brand-to));
     background-size:
-        32px 32px,
-        32px 32px,
+        var(--plate-pattern-size, 32px 32px, 32px 32px),
         100% 100%;
+}
+
+/*
+ | Plate patterns. Every deep plate (chamber floor, record and desk heroes,
+ | portal plate, sign-in) reads `--plate-pattern` and falls back to its own
+ | authored texture when it is unset. An administrator's choice lands as
+ | `data-plate-pattern` on <html>; the branding preview sets it on its own
+ | swatches. Each pattern is a background-image list with a matching size
+ | list, and is always white at low alpha because a plate always carries
+ | white text.
+ */
+[data-plate-pattern='authored'] {
+    --plate-pattern: initial;
+    --plate-pattern-size: initial;
+}
+
+[data-plate-pattern='none'] {
+    --plate-pattern: none;
+    --plate-pattern-size: auto;
+}
+
+[data-plate-pattern='lines'] {
+    --plate-pattern: repeating-linear-gradient(to right, rgb(255 255 255 / 0.08) 0 1px, transparent 1px 88px);
+    --plate-pattern-size: auto;
+}
+
+[data-plate-pattern='grid'] {
+    --plate-pattern:
+        linear-gradient(to right, rgb(255 255 255 / 0.055) 1px, transparent 1px),
+        linear-gradient(to bottom, rgb(255 255 255 / 0.055) 1px, transparent 1px);
+    --plate-pattern-size: 32px 32px, 32px 32px;
+}
+
+[data-plate-pattern='dots'] {
+    --plate-pattern: radial-gradient(circle, rgb(255 255 255 / 0.16) 1px, transparent 1.6px);
+    --plate-pattern-size: 16px 16px;
+}
+
+[data-plate-pattern='diagonal'] {
+    --plate-pattern: repeating-linear-gradient(135deg, rgb(255 255 255 / 0.05) 0 1px, transparent 1px 12px);
+    --plate-pattern-size: auto;
+}
+
+[data-plate-pattern='glow'] {
+    --plate-pattern: radial-gradient(120% 90% at 100% 0%, rgb(255 255 255 / 0.14), transparent 60%);
+    --plate-pattern-size: auto;
+}
+
+/* A chosen pattern already sits on `.bg-plate`; the portal's separate hairline overlay would double it. */
+html[data-plate-pattern] .bg-hairlines {
+    background-image: none;
 }
 
 .login-shell .login-input {
@@ -544,42 +608,71 @@
     }
 
     .bg-plate {
-        background-image: linear-gradient(
-            160deg,
-            var(--color-accent) 0%,
-            var(--color-accent-hover) 62%,
-            color-mix(in srgb, var(--color-brand) 55%, var(--color-accent-hover)) 100%
-        );
+        background-image:
+            var(--plate-pattern, none),
+            linear-gradient(
+                160deg,
+                var(--color-accent) 0%,
+                var(--color-accent-hover) 62%,
+                color-mix(in srgb, var(--color-brand) 55%, var(--color-accent-hover)) 100%
+            );
+        background-size:
+            var(--plate-pattern-size, auto),
+            100% 100%;
     }
 
     /* Chamber agenda hero: deep navy plate, left → right, with hairlines. */
     .bg-floor-plate {
         background-color: var(--color-floor-plate);
         background-image:
-            repeating-linear-gradient(to right, rgb(255 255 255 / 0.08) 0 1px, transparent 1px 88px),
-            linear-gradient(to right, var(--color-floor-plate) 0%, rgb(24, 41, 74) 50%, rgb(31, 54, 86) 100%);
+            var(--plate-pattern, repeating-linear-gradient(to right, rgb(255 255 255 / 0.08) 0 1px, transparent 1px 88px)),
+            linear-gradient(
+                to right,
+                var(--color-floor-plate) 0%,
+                var(--color-floor-plate-mid) 50%,
+                var(--color-floor-plate-end) 100%
+            );
+        background-size:
+            var(--plate-pattern-size, auto),
+            100% 100%;
     }
 
     /* Record detail hero: the same navy walk, without the chamber hairlines. */
     .bg-record-hero {
         background-color: var(--color-floor-plate);
-        background-image: linear-gradient(
-            to right,
-            var(--color-floor-plate) 0%,
-            rgb(24, 41, 74) 55%,
-            rgb(31, 54, 86) 100%
-        );
+        background-image:
+            var(--plate-pattern, none),
+            linear-gradient(
+                to right,
+                var(--color-floor-plate) 0%,
+                var(--color-floor-plate-mid) 55%,
+                var(--color-floor-plate-end) 100%
+            );
+        background-size:
+            var(--plate-pattern-size, auto),
+            100% 100%;
     }
 
     /* Secretariat desk: a warmer navy walk used only on the home plate. */
     .bg-dashboard-hero {
-        background-color: rgb(11, 32, 64);
-        background-image: linear-gradient(
-            105deg,
-            rgb(11, 32, 64) 0%,
-            rgb(16, 48, 88) 46%,
-            rgb(22, 68, 118) 100%
-        );
+        background-color: var(--color-desk-plate);
+        background-image:
+            var(--plate-pattern, none),
+            linear-gradient(105deg, var(--color-desk-plate) 0%, var(--color-desk-plate-mid) 46%, var(--color-desk-plate-end) 100%);
+        background-size:
+            var(--plate-pattern-size, auto),
+            100% 100%;
+    }
+
+    /* Branding preview: any plate colour under the pattern it is labelled with. */
+    .bg-plate-preview {
+        background-color: var(--plate-preview);
+        background-image:
+            var(--plate-pattern, repeating-linear-gradient(to right, rgb(255 255 255 / 0.08) 0 1px, transparent 1px 88px)),
+            linear-gradient(to right, var(--plate-preview), color-mix(in srgb, var(--plate-preview) 86%, white));
+        background-size:
+            var(--plate-pattern-size, auto),
+            100% 100%;
     }
 
     .bg-hairlines {
@@ -616,6 +709,12 @@
         border-color: var(--color-accent);
         background-color: var(--color-accent);
         background-image: url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath fill='none' stroke='%23ffffff' stroke-width='2' stroke-linecap='round' stroke-linejoin='round' d='M2.5 6.2l2.4 2.4L9.6 3.9'/%3E%3C/svg%3E");
+    }
+
+    .input-checkbox:indeterminate {
+        border-color: var(--color-accent);
+        background-color: var(--color-accent);
+        background-image: url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath fill='none' stroke='%23ffffff' stroke-width='2' stroke-linecap='round' d='M2.5 6h7'/%3E%3C/svg%3E");
     }
 
     .input-checkbox:focus-visible {

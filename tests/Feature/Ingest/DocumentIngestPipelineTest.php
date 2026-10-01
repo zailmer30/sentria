@@ -58,7 +58,7 @@ it('dispatches the ingest pipeline after upload', function (): void {
             'confidentiality' => Confidentiality::Internal->value,
             'reference_number' => 'MO-2026-'.fake()->unique()->numerify('####'),
             'enacting_clause' => 'Be it ordained by the Sangguniang Bayan, that:',
-            'proposed_effectivity' => 10,
+            'external_author' => 'Maria Santos',
             'explanatory_note' => 'This measure is proposed to address the stated purpose.',
             'file' => ingestUpload('queued.txt', "SECTION 1. Short Title.\nDemo text."),
         ])
@@ -77,7 +77,7 @@ it('processes uploaded text through the ingest pipeline and makes chunks searcha
             'confidentiality' => Confidentiality::Internal->value,
             'reference_number' => 'MO-2026-'.fake()->unique()->numerify('####'),
             'enacting_clause' => 'Be it ordained by the Sangguniang Bayan, that:',
-            'proposed_effectivity' => 10,
+            'external_author' => 'Maria Santos',
             'explanatory_note' => 'This measure is proposed to address the stated purpose.',
             'file' => ingestUpload('ordinance.txt', "SECTION 1. Short Title.\nThis measure shall be known as the Demo Ordinance.\n\nSECTION 2. Appropriations.\nFunds are hereby authorized."),
         ])

@@ -3,7 +3,9 @@
 namespace App\Http\Controllers;
 
 use App\Events\AgendaItemChanged;
+use App\Exceptions\TranslatedArgumentException;
 use App\Http\Requests\Sessions\BindAgendaDocumentsRequest;
+use App\Http\Requests\Sessions\BulkCalendarRouteRequest;
 use App\Http\Requests\Sessions\StoreAgendaItemRequest;
 use App\Http\Requests\Sessions\UpdateAgendaItemRequest;
 use App\Models\AgendaItem;
@@ -11,6 +13,7 @@ use App\Models\Document;
 use App\Models\LegislativeSession;
 use App\Services\Sessions\AgendaService;
 use App\Services\Sessions\CalendarRoutingService;
+use App\Services\Sessions\CommitteeHourService;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
 use InvalidArgumentException;
@@ -20,11 +23,16 @@ class AgendaItemController extends Controller
     public function __construct(
         private readonly AgendaService $agenda,
         private readonly CalendarRoutingService $calendar,
+        private readonly CommitteeHourService $committeeHour,
     ) {}
 
     public function store(StoreAgendaItemRequest $request, LegislativeSession $session): RedirectResponse
     {
         $this->authorize('create', AgendaItem::class);
+
+        if ($redirect = $this->rejectBlockedPlenaryDocument($session, $request->validated('document_id'))) {
+            return $redirect;
+        }
 
         $this->agenda->createItem($session, $request->validated());
 
@@ -34,6 +42,14 @@ class AgendaItemController extends Controller
     public function update(UpdateAgendaItemRequest $request, LegislativeSession $session, AgendaItem $agendaItem): RedirectResponse
     {
         abort_unless($agendaItem->session_id === $session->getKey(), 404);
+
+        if ($redirect = $this->rejectBlockedPlenaryDocument(
+            $session,
+            $request->validated('document_id'),
+            $agendaItem->document_id,
+        )) {
+            return $redirect;
+        }
 
         $agendaItem->update($request->validated());
 
@@ -54,6 +70,10 @@ class AgendaItemController extends Controller
                 $documentIds,
                 $this->requireUser($request),
             );
+        } catch (TranslatedArgumentException $exception) {
+            return back()
+                ->with('error', $exception->getMessage())
+                ->with('error_replacements', $exception->replacements);
         } catch (InvalidArgumentException $exception) {
             abort(422, $exception->getMessage());
         }
@@ -109,6 +129,21 @@ class AgendaItemController extends Controller
         return back()->with('success', 'sessions.agenda_advanced');
     }
 
+    public function recordCommitteeHourMotion(Request $request, LegislativeSession $session, AgendaItem $agendaItem): RedirectResponse
+    {
+        abort_unless($agendaItem->session_id === $session->getKey(), 404);
+
+        $this->authorize('create', AgendaItem::class);
+
+        try {
+            $this->committeeHour->recordChairMotion($session, $agendaItem, $this->requireUser($request));
+        } catch (InvalidArgumentException $exception) {
+            return back()->with('error', $exception->getMessage());
+        }
+
+        return back()->with('success', 'sessions.committee_hour.recorded');
+    }
+
     public function retreat(Request $request, LegislativeSession $session): RedirectResponse
     {
         $subject = $this->agenda->currentItem($session)
@@ -130,6 +165,28 @@ class AgendaItemController extends Controller
         event(new AgendaItemChanged($session, $current, $next));
 
         return back()->with('success', 'sessions.agenda_retreated');
+    }
+
+    public function beginHeadingVotes(Request $request, LegislativeSession $session): RedirectResponse
+    {
+        $current = $this->agenda->currentItem($session);
+
+        abort_unless($current instanceof AgendaItem, 422);
+
+        $this->authorize('beginHeadingVotes', $current);
+
+        try {
+            $this->agenda->beginHeadingVotes($session);
+        } catch (InvalidArgumentException $exception) {
+            return back()->with('error', $exception->getMessage());
+        }
+
+        $session->refresh();
+        $current = $this->agenda->currentItem($session);
+        $next = $this->agenda->nextPendingItem($session);
+        event(new AgendaItemChanged($session, $current, $next));
+
+        return back()->with('success', 'sessions.heading_votes_begun');
     }
 
     public function calendarSecondReading(Request $request, LegislativeSession $session, AgendaItem $agendaItem): RedirectResponse
@@ -197,7 +254,7 @@ class AgendaItemController extends Controller
         try {
             $this->calendar->placeDocumentOnSecondReading($session, $document, $this->requireUser($request));
         } catch (InvalidArgumentException $exception) {
-            return back()->with('error', $exception->getMessage());
+            return $this->argumentError($exception);
         }
 
         return back()->with('success', 'sessions.calendar.second_reading_done');
@@ -212,7 +269,7 @@ class AgendaItemController extends Controller
         try {
             $this->calendar->postponeDocument($session, $document, $this->requireUser($request));
         } catch (InvalidArgumentException $exception) {
-            return back()->with('error', $exception->getMessage());
+            return $this->argumentError($exception);
         }
 
         return back()->with('success', 'sessions.calendar.postponed');
@@ -231,6 +288,70 @@ class AgendaItemController extends Controller
         }
 
         return back()->with('success', 'sessions.calendar.third_reading_done');
+    }
+
+    public function bulkCalendarRoute(BulkCalendarRouteRequest $request, LegislativeSession $session): RedirectResponse
+    {
+        /** @var 'second-reading'|'postpone'|'third-reading'|'undo' $action */
+        $action = $request->validated('action');
+        /** @var list<array{agenda_item_id?: string|null, document_id?: string|null}> $items */
+        $items = $request->validated('items');
+
+        try {
+            $this->calendar->bulkRoute(
+                $session,
+                $action,
+                $items,
+                $this->requireUser($request),
+            );
+        } catch (InvalidArgumentException $exception) {
+            $redirect = back()->with('error', $exception->getMessage());
+
+            if ($exception instanceof TranslatedArgumentException) {
+                $redirect->with('error_replacements', $exception->replacements);
+            }
+
+            return $redirect;
+        }
+
+        return back()->with('success', match ($action) {
+            'second-reading' => 'sessions.calendar.bulk_second_reading_done',
+            'postpone' => 'sessions.calendar.bulk_postponed',
+            'third-reading' => 'sessions.calendar.bulk_third_reading_done',
+            'undo' => 'sessions.calendar.bulk_undo_done',
+        });
+    }
+
+    private function rejectBlockedPlenaryDocument(LegislativeSession $session, mixed $documentId, mixed $currentDocumentId = null): ?RedirectResponse
+    {
+        if (! is_string($documentId) || $documentId === '' || $documentId === $currentDocumentId) {
+            return null;
+        }
+
+        $document = Document::query()->find($documentId);
+
+        if (! $document instanceof Document) {
+            return null;
+        }
+
+        try {
+            $this->agenda->assertManualPlenaryPlacement($session, $document);
+        } catch (TranslatedArgumentException $exception) {
+            return $this->argumentError($exception);
+        }
+
+        return null;
+    }
+
+    private function argumentError(InvalidArgumentException $exception): RedirectResponse
+    {
+        $redirect = back()->with('error', $exception->getMessage());
+
+        if ($exception instanceof TranslatedArgumentException) {
+            $redirect->with('error_replacements', $exception->replacements);
+        }
+
+        return $redirect;
     }
 
     private function calendarDocument(Request $request): Document

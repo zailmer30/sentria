@@ -23,6 +23,7 @@ class StoreCommitteeReferralRequest extends FormRequest
             'session_id' => ['nullable', 'ulid', 'exists:sessions,id'],
             'instructions' => ['nullable', 'string', 'max:5000'],
             'due_at' => ['nullable', 'date'],
+            'meeting_on' => ['nullable', 'date'],
             'is_primary' => ['nullable', 'boolean'],
         ];
     }

@@ -24,17 +24,14 @@ class OrdinanceFactory extends Factory
 
         return [
             'document_id' => Document::factory()->ofType(DocumentType::Ordinance)->published(),
-            'ordinance_number' => sprintf('ORD-%d-%03d', $year, fake()->unique()->numberBetween(1, 999)),
+            'ordinance_number' => sprintf('%03d', fake()->unique()->numberBetween(1, 999)),
             'series_year' => $year,
             'title' => fake()->sentence(10),
             'purpose' => fake()->paragraph(),
             'status' => 'enacted',
             'enacted_on' => $enacted,
             'approving_authority' => 'Provincial Governor',
-            'approved_on' => (clone $enacted)->modify('+10 days'),
             'effectivity_date' => (clone $enacted)->modify('+25 days'),
-            'publication_date' => (clone $enacted)->modify('+18 days'),
-            'publication_medium' => 'Provincial newspaper of general circulation',
         ];
     }
 
@@ -42,8 +39,6 @@ class OrdinanceFactory extends Factory
     {
         return $this->state(fn (array $attributes): array => [
             'status' => 'vetoed',
-            'approved_on' => null,
-            'vetoed_on' => now()->subDays(30),
             'effectivity_date' => null,
         ]);
     }

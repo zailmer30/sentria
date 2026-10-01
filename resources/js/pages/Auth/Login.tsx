@@ -3,12 +3,13 @@
  * this page only rebuilds the surface. Forgot-password and reset stay on GuestLayout.
  */
 
+import { BrandMark } from '@/components/branding/BrandMark';
 import { Checkbox } from '@/components/ui/input';
 import { useTranslations } from '@/lib/i18n';
 import { cn } from '@/lib/utils';
 import type { PageProps } from '@/types';
 import { Head, Link, useForm, usePage } from '@inertiajs/react';
-import { ArrowRight, Eye, EyeOff, FileText, Gavel, Landmark, Lock, Users, type LucideIcon } from 'lucide-react';
+import { ArrowRight, Eye, EyeOff, FileText, Gavel, Lock, Users, type LucideIcon } from 'lucide-react';
 import { useState, type FormEvent } from 'react';
 
 type LoginProps = {
@@ -49,9 +50,7 @@ export default function Login({ canResetPassword, status }: LoginProps) {
             <div className="grid min-h-screen gap-0 lg:h-screen lg:grid-cols-2 lg:overflow-hidden">
                 <aside className="login-brand flex flex-col px-7 py-8 lg:h-full lg:min-h-0 lg:overflow-y-auto lg:px-12 lg:pt-10 lg:pb-8">
                     <div className="flex items-center gap-3">
-                        <span className="flex size-9 shrink-0 items-center justify-center rounded-full border border-[var(--login-lockup-border)] bg-[var(--login-lockup-bg)]">
-                            <Landmark aria-hidden="true" className="size-[18px] text-white" strokeWidth={1.75} />
-                        </span>
+                        <BrandMark className="size-9" fallbackClassName="rounded-full border border-[var(--login-lockup-border)]" />
                         <div className="min-w-0">
                             <p className="text-[18px] leading-[1.1] font-bold tracking-[-0.02em] text-white">{t('app.name')}</p>
                             <p className="text-[11px] leading-[1.3] font-normal text-[var(--login-muted)]">{t('app.tagline')}</p>

@@ -16,6 +16,8 @@ use OwenIt\Auditing\Contracts\Auditable;
 /**
  * @property Carbon|null $referred_at
  * @property Carbon|null $due_at
+ * @property Carbon|null $meeting_on
+ * @property bool $hearing_waived
  * @property Carbon|null $completed_at
  * @property string|null $outcome_notes
  */
@@ -41,6 +43,8 @@ class CommitteeReferral extends Model implements Auditable
             'is_primary' => 'boolean',
             'referred_at' => 'datetime',
             'due_at' => 'datetime',
+            'meeting_on' => 'date',
+            'hearing_waived' => 'boolean',
             'completed_at' => 'datetime',
         ];
     }

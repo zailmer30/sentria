@@ -12,6 +12,10 @@ function statusTone(status: string): StatusTone {
         return 'final';
     }
 
+    if (status === 'considered') {
+        return 'review';
+    }
+
     return 'draft';
 }
 
@@ -22,6 +26,10 @@ function statusLabel(status: string, t: (key: string) => string): string {
 
     if (status === 'completed') {
         return t('sessions.reading.status_completed');
+    }
+
+    if (status === 'considered') {
+        return t('sessions.reading.status_considered');
     }
 
     return t('sessions.reading.status_pending');

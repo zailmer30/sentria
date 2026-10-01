@@ -41,6 +41,11 @@ export function useSessionEcho(
         const unsubscribe = subscribeToSession(sessionId, {
             onSessionState: () => router.reload({ only }),
             onAttendance: () => router.reload({ only: ['quorum', 'attendance'] }),
+            onGuests: () => {
+                if (only.includes('guests')) {
+                    router.reload({ only: ['guests'] });
+                }
+            },
             onMotion: () => router.reload({ only: ['motions', 'recognition', 'can'] }),
             onVotingOpened: (payload) => {
                 handlersRef.current.onVotingOpened?.(payload);
@@ -73,6 +78,8 @@ export function useSessionEcho(
                         'calendar_docket',
                         'document_link',
                         'private_notes',
+                        'advance_blocked_reason',
+                        ...(only.includes('can') ? (['can'] as const) : []),
                         ...(only.includes('hall_display') ? (['hall_display'] as const) : []),
                     ],
                 }),
@@ -94,6 +101,11 @@ export function useSessionEcho(
                 }
 
                 router.reload({ only: ['recognition', 'can'] });
+            },
+            onMinutesCorrections: () => {
+                if (only.includes('minutes_corrections')) {
+                    router.reload({ only: ['minutes_corrections'] });
+                }
             },
         });
 

@@ -10,6 +10,7 @@ use App\Models\LegislativeSession;
 use App\Models\Minutes;
 use App\Services\AI\LegislativeMinutesGenerator;
 use App\Services\Audit\AuditLogger;
+use App\Services\Minutes\MinutesPdf;
 use App\Services\Workflow\GuardedStateTransition;
 use App\States\Minutes\AiDraft;
 use App\States\Minutes\Approval;
@@ -25,6 +26,7 @@ use Illuminate\Http\Request;
 use Inertia\Inertia;
 use Inertia\Response;
 use InvalidArgumentException;
+use Symfony\Component\HttpFoundation\Response as HttpResponse;
 
 class MinutesController extends Controller
 {
@@ -32,6 +34,7 @@ class MinutesController extends Controller
         private readonly AuditLogger $audit,
         private readonly GuardedStateTransition $transitions,
         private readonly MinutesGenerationService $generator,
+        private readonly MinutesPdf $pdfs,
     ) {}
 
     public function index(Request $request): Response
@@ -70,6 +73,22 @@ class MinutesController extends Controller
             'minutes' => $this->detail($minute),
             'can' => $this->abilities($minute),
         ]);
+    }
+
+    public function pdf(Request $request, Minutes $minute): HttpResponse
+    {
+        $this->authorize('view', $minute);
+        abort_unless(trim((string) $minute->content) !== '', 404);
+
+        $this->audit->record(
+            event: 'minutes.download',
+            category: 'minutes',
+            auditable: $minute,
+            actor: $this->requireUser($request),
+            message: 'Minutes PDF downloaded.',
+        );
+
+        return $this->pdfs->download($minute);
     }
 
     public function create(Request $request): Response
@@ -435,6 +454,7 @@ class MinutesController extends Controller
             'approve' => $user?->can('approve', $minutes) ?? false,
             'finalize' => $user?->can('finalize', $minutes) ?? false,
             'archive' => $user?->can('archive', $minutes) ?? false,
+            'download' => trim((string) $minutes->content) !== '',
         ];
     }
 }

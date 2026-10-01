@@ -1,5 +1,6 @@
-import { FloorRecognitionDock } from '@/components/session/FloorRecognitionDock';
 import { CalendarDocket, CalendarItemActions } from '@/components/session/CalendarDocket';
+import { FloorRecognitionDock } from '@/components/session/FloorRecognitionDock';
+import { MinutesCorrectionsPanel } from '@/components/session/MinutesCorrectionsPanel';
 import { OrderOfBusiness } from '@/components/session/OrderOfBusiness';
 import { SecretariatMinutesPanel } from '@/components/session/SecretariatMinutesPanel';
 import { SessionAssistantPanel } from '@/components/session/SessionAssistantPanel';
@@ -11,12 +12,10 @@ import { useTranslations } from '@/lib/i18n';
 import { useMemo } from 'react';
 import {
     ConsoleAgendaCard,
-    ConsoleAttendance,
     ConsoleControls,
     ConsoleHallDocument,
-    ConsoleMotions,
+    ConsoleHallReport,
     ConsolePlate,
-    ConsoleRecording,
     ConsoleTranscript,
 } from './console';
 import { MotionRecorder, VotingBindingBanner, type FloorProps } from './shared';
@@ -24,8 +23,9 @@ import { MotionRecorder, VotingBindingBanner, type FloorProps } from './shared';
 /**
  * The secretariat console. The sitting's identity and its three counted facts
  * sit on the plate at the top. Below that the clerk switches between the
- * console (agenda, controls, the discussion inbox, motions) and the minutes
- * tab — a live record that is folded into the system-generated draft after
+ * console (current item, session controls, docket, hall PDF), the
+ * recording tab (discussion inbox for unattributed transcript lines), and the
+ * minutes tab — a live record folded into the system-generated draft after
  * adjournment.
  *
  * The layout chrome above deliberately runs without the session title here —
@@ -41,7 +41,6 @@ const SECRETARIAT_ECHO_PROPS = [
     'quorum',
     'attendance',
     'voting',
-    'motions',
     'recognition',
     'elapsed_seconds',
     'assistant',
@@ -50,6 +49,8 @@ const SECRETARIAT_ECHO_PROPS = [
     'reading_pack',
     'calendar_docket',
     'advance_blocked_reason',
+    'minutes_corrections',
+    'can',
 ];
 
 export default function SecretariatFloor({
@@ -62,7 +63,6 @@ export default function SecretariatFloor({
     elapsed_seconds,
     can,
     voting,
-    motions,
     recognition = { pending: [], recognized: null },
     reading_pack = [],
     calendar_docket = [],
@@ -72,19 +72,19 @@ export default function SecretariatFloor({
     committees = [],
     advance_blocked_reason = null,
     workspace = 'console',
+    minutes_corrections = [],
 }: FloorProps) {
     const { t } = useTranslations();
     useSessionEcho(session.id, SECRETARIAT_ECHO_PROPS);
 
-    const { segments: liveSegments, status: liveStatus, error: liveError } = useTranscriptEcho(
-        session.id,
-        transcript?.segments ?? [],
-        Boolean(can.view_transcript),
-        {
-            status: transcript?.status,
-            error: transcript?.processing_error,
-        },
-    );
+    const {
+        segments: liveSegments,
+        status: liveStatus,
+        error: liveError,
+    } = useTranscriptEcho(session.id, transcript?.segments ?? [], Boolean(can.view_transcript), {
+        status: transcript?.status,
+        error: transcript?.processing_error,
+    });
 
     const segments = liveSegments.length > 0 ? liveSegments : (transcript?.segments ?? []);
 
@@ -97,17 +97,31 @@ export default function SecretariatFloor({
     );
 
     const projectedPackItem = useMemo(() => {
-        if (hall_display.stage !== 'document' || !hall_display.agenda_item_id) {
+        if (
+            (hall_display.stage !== 'document' && hall_display.stage !== 'report') ||
+            !hall_display.agenda_item_id
+        ) {
             return null;
         }
 
         return reading_pack.find((row) => row.id === hall_display.agenda_item_id) ?? null;
     }, [hall_display, reading_pack]);
 
+    const pageTitle =
+        workspace === 'minutes'
+            ? t('sessions.floor.tab_minutes')
+            : workspace === 'recording'
+              ? t('sessions.floor.tab_recording')
+              : t('sessions.floor.secretariat');
+
     return (
         <SessionLayout
-            title={workspace === 'minutes' ? t('sessions.floor.tab_minutes') : t('sessions.floor.secretariat')}
+            title={pageTitle}
+            sessionTitle={session.title}
             sessionId={session.id}
+            sessionStatus={session.status}
+            venue={session.venue}
+            presidingOfficer={session.presiding_officer}
         >
             <div className="flex flex-col gap-4">
                 <FloorRecognitionDock sessionId={session.id} recognition={recognition} />
@@ -132,111 +146,133 @@ export default function SecretariatFloor({
                         currentItem={current_item}
                         t={t}
                     />
+                ) : workspace === 'recording' ? (
+                    <div className="grid items-start gap-4 xl:grid-cols-[minmax(0,1fr)_22rem]">
+                        <div className="flex flex-col gap-4">
+                            {can.view_transcript ? (
+                                <ConsoleTranscript
+                                    sessionId={session.id}
+                                    transcriptId={transcript?.id ?? null}
+                                    segments={segments}
+                                    status={liveStatus ?? transcript?.status ?? null}
+                                    error={liveError ?? transcript?.processing_error ?? null}
+                                    speakers={attendance
+                                        .filter((row) => Boolean(row.user_id))
+                                        .map((row) => ({
+                                            id: row.user_id as string,
+                                            display_name: row.display_name,
+                                        }))}
+                                    canCorrect={Boolean(can.correct_transcript)}
+                                    t={t}
+                                />
+                            ) : null}
+                        </div>
+
+                        <aside className="flex flex-col gap-4 xl:sticky xl:top-32 xl:max-h-[calc(100dvh-8rem)] xl:self-start">
+                            <OrderOfBusiness
+                                items={reading_pack}
+                                currentItemId={current_item?.id ?? null}
+                                scrollable
+                            />
+                        </aside>
+                    </div>
                 ) : (
                     <div className="grid items-start gap-4 xl:grid-cols-[minmax(0,1fr)_22rem]">
                         <div className="flex flex-col gap-4">
-                                <ConsoleAgendaCard
+                            <ConsoleAgendaCard
+                                sessionId={session.id}
+                                item={current_item}
+                                packItem={currentPackItem}
+                                voting={voting}
+                                hallDisplay={hall_display}
+                                canControlHall={Boolean(can.control_hall_display)}
+                                committees={committees}
+                                t={t}
+                                actions={
+                                    current_item ? (
+                                        <CalendarItemActions
+                                            sessionId={session.id}
+                                            item={{
+                                                id: current_item.id,
+                                                can_second_reading:
+                                                    currentPackItem?.can_second_reading ?? current_item.can_second_reading,
+                                                can_third_reading:
+                                                    currentPackItem?.can_third_reading ?? current_item.can_third_reading,
+                                                placed_on_third_reading:
+                                                    currentPackItem?.placed_on_third_reading ??
+                                                    current_item.placed_on_third_reading,
+                                                can_postpone: currentPackItem?.can_postpone ?? current_item.can_postpone,
+                                                can_undo: currentPackItem?.can_undo ?? current_item.can_undo,
+                                            }}
+                                            t={t}
+                                        />
+                                    ) : null
+                                }
+                            />
+
+                            {currentPackItem?.category === 'approval-minutes' && currentPackItem.document ? (
+                                <MinutesCorrectionsPanel
                                     sessionId={session.id}
-                                    item={current_item}
-                                    packItem={currentPackItem}
-                                    voting={voting}
-                                    hallDisplay={hall_display}
-                                    canControlHall={Boolean(can.control_hall_display)}
-                                    committees={committees}
-                                    t={t}
-                                    actions={
-                                        current_item ? (
-                                            <CalendarItemActions
-                                                sessionId={session.id}
-                                                item={{
-                                                    id: current_item.id,
-                                                    can_second_reading:
-                                                        currentPackItem?.can_second_reading ?? current_item.can_second_reading,
-                                                    can_third_reading:
-                                                        currentPackItem?.can_third_reading ?? current_item.can_third_reading,
-                                                    placed_on_third_reading:
-                                                        currentPackItem?.placed_on_third_reading ??
-                                                        current_item.placed_on_third_reading,
-                                                    can_postpone: currentPackItem?.can_postpone ?? current_item.can_postpone,
-                                                    can_undo: currentPackItem?.can_undo ?? current_item.can_undo,
-                                                }}
-                                                t={t}
-                                            />
-                                        ) : null
+                                    agendaItemId={currentPackItem.id}
+                                    corrections={minutes_corrections}
+                                    canWrite={
+                                        Boolean(can.record_minutes_corrections) && currentPackItem.status === 'in-progress'
                                     }
-                                />
-
-                                <CalendarDocket sessionId={session.id} items={calendar_docket} t={t} />
-
-                                {projectedPackItem ? (
-                                    <ConsoleHallDocument
-                                        sessionId={session.id}
-                                        packItem={projectedPackItem}
-                                        view={hall_display.view ?? null}
-                                        t={t}
-                                    />
-                                ) : null}
-
-                                <ConsoleControls
-                                    session={session}
-                                    currentItem={current_item}
-                                    nextItem={next_item}
-                                    previousItem={previous_item}
-                                    currentPackItem={currentPackItem}
-                                    can={can}
-                                    voting={voting}
-                                    hallDisplay={hall_display}
-                                    expectedBallots={present}
                                     t={t}
-                                    advanceBlockedReason={advance_blocked_reason}
                                 />
+                            ) : null}
 
-                                {can.view_transcript ? (
-                                    <ConsoleTranscript
-                                        sessionId={session.id}
-                                        transcriptId={transcript?.id ?? null}
-                                        segments={segments}
-                                        status={liveStatus ?? transcript?.status ?? null}
-                                        error={liveError ?? transcript?.processing_error ?? null}
-                                        speakers={attendance
-                                            .filter((row) => Boolean(row.user_id))
-                                            .map((row) => ({
-                                                id: row.user_id as string,
-                                                display_name: row.display_name,
-                                            }))}
-                                        canCorrect={Boolean(can.correct_transcript)}
-                                        t={t}
-                                    />
-                                ) : null}
+                            <ConsoleControls
+                                session={session}
+                                currentItem={current_item}
+                                nextItem={next_item}
+                                previousItem={previous_item}
+                                currentPackItem={currentPackItem}
+                                can={can}
+                                voting={voting}
+                                hallDisplay={hall_display}
+                                expectedBallots={present}
+                                t={t}
+                                advanceBlockedReason={advance_blocked_reason}
+                            />
 
-                                {voting.open ? (
-                                    <VotingMemberBoard
-                                        members={voting.members ?? []}
-                                        presentCount={present}
-                                        absentCount={absent}
-                                    />
-                                ) : null}
+                            <CalendarDocket sessionId={session.id} items={calendar_docket} t={t} committees={committees} />
 
-                                <MotionRecorder
-                                    key={recognition.recognized?.id ?? 'motion-recorder'}
+                            {projectedPackItem && hall_display.stage === 'document' ? (
+                                <ConsoleHallDocument
                                     sessionId={session.id}
-                                    currentItemId={current_item?.id ?? null}
-                                    canCreate={Boolean(can.create_motion || can.record_spoken_motion)}
+                                    packItem={projectedPackItem}
+                                    view={hall_display.view ?? null}
                                     t={t}
-                                    recognized={recognition.recognized}
                                 />
+                            ) : null}
 
-                                <ConsoleMotions motions={motions} sessionId={session.id} t={t} />
-                            </div>
+                            {projectedPackItem && hall_display.stage === 'report' ? (
+                                <ConsoleHallReport packItem={projectedPackItem} t={t} />
+                            ) : null}
 
-                            <aside className="flex flex-col gap-4 xl:sticky xl:top-32 xl:self-start">
-                                {can.manage_recording ? <ConsoleRecording session={session} t={t} /> : null}
+                            {voting.open ? (
+                                <VotingMemberBoard members={voting.members ?? []} presentCount={present} absentCount={absent} />
+                            ) : null}
 
-                                <ConsoleAttendance attendance={attendance} quorum={quorum} t={t} />
-
-                                <OrderOfBusiness items={reading_pack} currentItemId={current_item?.id ?? null} />
-                            </aside>
+                            <MotionRecorder
+                                key={recognition.recognized?.id ?? 'motion-recorder'}
+                                sessionId={session.id}
+                                currentItemId={current_item?.id ?? null}
+                                canCreate={Boolean(can.create_motion || can.record_spoken_motion)}
+                                t={t}
+                                recognized={recognition.recognized}
+                            />
                         </div>
+
+                        <aside className="flex flex-col gap-4 xl:sticky xl:top-32 xl:max-h-[calc(100dvh-8rem)] xl:self-start">
+                            <OrderOfBusiness
+                                items={reading_pack}
+                                currentItemId={current_item?.id ?? null}
+                                scrollable
+                            />
+                        </aside>
+                    </div>
                 )}
             </div>
 

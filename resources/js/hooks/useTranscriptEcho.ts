@@ -1,6 +1,23 @@
 import { sortTranscriptSegments, subscribeToTranscript, type TranscriptSegment } from '@/lib/echo';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 
+function preserveOriginals(previous: TranscriptSegment, incoming: TranscriptSegment): TranscriptSegment {
+    if (incoming.original_text !== undefined) {
+        return incoming;
+    }
+
+    return {
+        ...incoming,
+        original_text: previous.original_text,
+        original_speaker: previous.original_speaker,
+        original_speaker_id: previous.original_speaker_id,
+        original_attributed: previous.original_attributed,
+        is_edited: incoming.is_edited ?? previous.is_edited,
+        edited_at: incoming.edited_at ?? previous.edited_at,
+        edited_by: incoming.edited_by ?? previous.edited_by,
+    };
+}
+
 export function useTranscriptEcho(
     sessionId: string,
     initialSegments: TranscriptSegment[] = [],
@@ -17,7 +34,8 @@ export function useTranscriptEcho(
 
             if (existing >= 0) {
                 const next = [...current];
-                next[existing] = segment;
+                const previous = next[existing];
+                next[existing] = previous ? preserveOriginals(previous, segment) : segment;
 
                 return next;
             }
@@ -50,7 +68,15 @@ export function useTranscriptEcho(
                 }
 
                 if (nextSegments && nextSegments.length > 0) {
-                    setLiveSegments(nextSegments);
+                    setLiveSegments((current) => {
+                        const known = new Map(current.map((segment) => [segment.index, segment]));
+
+                        return nextSegments.map((segment) => {
+                            const previous = known.get(segment.index);
+
+                            return previous ? preserveOriginals(previous, segment) : segment;
+                        });
+                    });
                 }
             },
         });
@@ -60,7 +86,10 @@ export function useTranscriptEcho(
         const merged = new Map<number, TranscriptSegment>();
 
         initialSegments.forEach((segment) => merged.set(segment.index, segment));
-        liveSegments.forEach((segment) => merged.set(segment.index, segment));
+        liveSegments.forEach((segment) => {
+            const previous = merged.get(segment.index);
+            merged.set(segment.index, previous ? preserveOriginals(previous, segment) : segment);
+        });
 
         return sortTranscriptSegments([...merged.values()]);
     }, [initialSegments, liveSegments]);

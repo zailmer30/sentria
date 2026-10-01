@@ -29,7 +29,7 @@ const buttonVariants = cva(
                 primary:
                     'border-accent bg-accent text-[var(--color-accent-on)] shadow-[var(--shadow-xs)] hover:border-[var(--color-accent-hover)] hover:bg-[var(--color-accent-hover)]',
                 /** Deep navy used on register pages for the primary row action. */
-                plate: 'border-[var(--color-floor-plate)] bg-[var(--color-floor-plate)] text-[var(--color-floor-ink)] shadow-none hover:border-[rgb(24,41,74)] hover:bg-[rgb(24,41,74)]',
+                plate: 'border-[var(--color-floor-plate)] bg-[var(--color-floor-plate)] text-[var(--color-floor-ink)] shadow-none hover:border-floor-plate-hover hover:bg-floor-plate-hover',
                 secondary:
                     'border-line-control bg-surface text-ink shadow-[var(--shadow-xs)] hover:bg-canvas-sunk',
                 ghost: 'border-transparent bg-transparent text-ink-muted hover:bg-canvas-sunk hover:text-ink',

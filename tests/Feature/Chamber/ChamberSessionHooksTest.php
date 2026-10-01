@@ -11,7 +11,6 @@ use Database\Seeders\PermissionMatrixSeeder;
 use Database\Seeders\RolePermissionSeeder;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Storage;
-use Inertia\Testing\AssertableInertia as Assert;
 
 beforeEach(function (): void {
     $this->seed([
@@ -106,26 +105,4 @@ it('lets secretariat switch a sitting to mixer mix', function (): void {
         ->assertRedirect();
 
     expect($session->fresh()->capture_mode->value)->toBe('mixer_mix');
-});
-
-it('exposes recording controls on the secretariat console', function (): void {
-    $secretariat = User::factory()->create([
-        'email' => 'sec-console-recording@sentria.test',
-        'password' => Hash::make('password'),
-        'is_active' => true,
-    ])->assignRole(UserRole::Secretariat->value);
-
-    $session = LegislativeSession::factory()->inSession()->create([
-        'recording_enabled' => false,
-        'capture_mode' => 'mixer_mix',
-    ]);
-
-    $this->actingAs($secretariat)
-        ->get(route('sessions.floor.secretariat', $session))
-        ->assertOk()
-        ->assertInertia(fn (Assert $page) => $page
-            ->component('Sessions/Floor/Secretariat')
-            ->where('can.manage_recording', true)
-            ->where('session.recording_enabled', false)
-            ->where('session.capture_mode', 'mixer_mix'));
 });

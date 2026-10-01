@@ -16,6 +16,13 @@ class SettingsController extends Controller
 
         $areas = [
             [
+                'key' => 'branding',
+                'label' => 'settings.areas.branding',
+                'description' => 'settings.areas.branding_desc',
+                'href' => '/settings/branding',
+                'available' => $user->can('settings.viewAny'),
+            ],
+            [
                 'key' => 'users',
                 'label' => 'settings.areas.users',
                 'description' => 'settings.areas.users_desc',

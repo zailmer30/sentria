@@ -1,5 +1,8 @@
+@php
+    $platePattern = app(\App\Services\Branding\BrandingService::class)->platePatternAttribute();
+@endphp
 <!DOCTYPE html>
-<html lang="{{ str_replace('_', '-', app()->getLocale()) }}" class="sentria">
+<html lang="{{ str_replace('_', '-', app()->getLocale()) }}" class="sentria" @if ($platePattern) data-plate-pattern="{{ $platePattern }}" @endif>
     <head>
         <meta charset="utf-8">
         <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -30,6 +33,12 @@
 
         @viteReactRefresh
         @vite(['resources/css/app.css', 'resources/js/app.tsx'])
+        @php
+            $brandCss = app(\App\Services\Branding\BrandingService::class)->css();
+        @endphp
+        @if ($brandCss !== '')
+            <style id="sentria-brand">{!! $brandCss !!}</style>
+        @endif
         @inertiaHead
     </head>
     <body class="min-h-screen bg-shell font-sans text-ink antialiased">

@@ -1,0 +1,25 @@
+{
+  "needs": [
+    "member-floor-highlight: drag did not save a mark. The Annotate tab was opened; check the still for a stroke.",
+    "member-floor-highlight: drag did not save a mark. The Annotate tab was opened; check the still for a stroke."
+  ],
+  "notes": [
+    "saved quorum-short.png",
+    "saved secretariat-console.png",
+    "Quorum did not arrive over the broadcast. Reloading the secretariat page.",
+    "saved rec-quorum-checkin.webm",
+    "saved quorum-met.png",
+    "saved member-floor-clean.png",
+    "saved rec-member-highlight.webm",
+    "saved member-floor-highlight.png",
+    "saved rec-member-notes.webm",
+    "saved member-notes.png",
+    "saved rec-assistant-open.webm",
+    "saved member-assistant.png",
+    "saved presiding-same-floor.png",
+    "saved rec-hall-document.webm",
+    "saved hall-document-light.png",
+    "saved hall-document-dark.png",
+    "saved secretariat-pdf-sent.png"
+  ]
+}

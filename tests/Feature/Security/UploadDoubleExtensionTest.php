@@ -33,7 +33,7 @@ it('rejects uploads with double extensions in the original filename', function (
             'confidentiality' => 'internal',
             'reference_number' => 'MO-2026-0099',
             'enacting_clause' => 'Be it ordained by the Sangguniang Bayan, that:',
-            'proposed_effectivity' => 10,
+            'external_author' => 'Maria Santos',
             'explanatory_note' => 'This measure is proposed to address the stated purpose.',
             'file' => $file,
         ])

@@ -62,7 +62,12 @@ class LegislativeSignedCopyController extends Controller
         /** @var UploadedFile $file */
         $file = $request->file('file');
 
-        $this->signedCopies->store($record, $this->requireUser($request), $file);
+        $this->signedCopies->store(
+            $record,
+            $this->requireUser($request),
+            $file,
+            $request->boolean('confirm_unpublish'),
+        );
 
         return redirect()
             ->back()

@@ -71,7 +71,10 @@ it('walks through motion, voting, and adjournment over HTTP', function (): void 
 
     $this->actingAs($secretariat)->post(route('sessions.start', $session))->assertRedirect();
     $session = $session->fresh();
-    expect($session->status)->toBeInstanceOf(InSession::class);
+    expect($session->status)->toBeInstanceOf(InSession::class)
+        ->and($session->agendaItems()->where('status', 'in-progress')->count())->toBe(0);
+
+    $this->actingAs($secretariat)->post(route('sessions.agenda.advance', $session))->assertRedirect();
 
     $currentItem = $session->agendaItems()->where('status', 'in-progress')->firstOrFail();
 

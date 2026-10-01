@@ -29,4 +29,13 @@ enum AttendanceStatus: string
     {
         return in_array($this, [self::Present, self::Late], true);
     }
+
+    /**
+     * Absent, excused, and official business are the statuses that need a
+     * written why. Present and late are a tap on the roll.
+     */
+    public function takesRemarks(): bool
+    {
+        return ! $this->countsTowardQuorum();
+    }
 }

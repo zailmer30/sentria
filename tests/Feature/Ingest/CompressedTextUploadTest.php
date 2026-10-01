@@ -46,7 +46,7 @@ it('uploads a pdf with icc-style binary parentheses without query exceptions', f
             'confidentiality' => Confidentiality::Internal->value,
             'reference_number' => 'MO-2026-'.fake()->unique()->numerify('####'),
             'enacting_clause' => 'Be it ordained by the Sangguniang Bayan, that:',
-            'proposed_effectivity' => 10,
+            'external_author' => 'Maria Santos',
             'explanatory_note' => 'This measure is proposed to address the stated purpose.',
             'file' => $file,
         ])

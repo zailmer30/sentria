@@ -1,9 +1,11 @@
 import { DocumentPreviewDialog } from '@/components/documents/DocumentPreviewDialog';
 import { CalendarItemActions } from '@/components/session/CalendarDocket';
+import { MinutesCorrectionsPanel } from '@/components/session/MinutesCorrectionsPanel';
 import { Button } from '@/components/ui/button';
+import { FileDrop } from '@/components/ui/file-drop';
 import { Dialog, DialogContent, DialogFooter } from '@/components/ui/dialog';
 import { Field, fieldAria } from '@/components/ui/field';
-import { Input } from '@/components/ui/input';
+import { Input, Textarea } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { StatusChip, toneForState, type StatusTone } from '@/components/ui/status';
 import { useTranslations } from '@/lib/i18n';
@@ -29,8 +31,19 @@ import {
 } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 import { Link, router, useForm } from '@inertiajs/react';
-import { Check, ChevronDown, ChevronUp, Eye, GripVertical, Paperclip, Plus, Trash2 } from 'lucide-react';
-import { FormEvent, useMemo, useState } from 'react';
+import {
+    Check,
+    ChevronDown,
+    ChevronUp,
+    Eye,
+    GripVertical,
+    Paperclip,
+    Pencil,
+    Plus,
+    SquareArrowOutUpRight,
+    Trash2,
+} from 'lucide-react';
+import { FormEvent, useEffect, useMemo, useState } from 'react';
 
 type DocumentOption = {
     id: string;
@@ -39,6 +52,15 @@ type DocumentOption = {
     status?: string;
     document_type?: string;
     current_reading?: number | null;
+    suggested?: boolean;
+    source_session?: { id: string; session_number: string; title: string } | null;
+};
+
+export type MinutesConsideration = {
+    previous_session: { id: string; session_number: string; title: string } | null;
+    sessions: { id: string; session_number: string; title: string }[];
+    suggested_document_ids: string[];
+    documents: DocumentOption[];
 };
 
 export type AgendaLinkedDocument = {
@@ -57,6 +79,7 @@ export type AgendaListItem = {
     position: number;
     item_number?: string | null;
     title: string;
+    description?: string | null;
     category?: string | null;
     status: string;
     document_id?: string | null;
@@ -66,6 +89,7 @@ export type AgendaListItem = {
     can_postpone?: boolean;
     can_undo?: boolean;
     carried_to?: { id: string; session_number: string; title: string } | null;
+    minutes_corrections?: import('@/components/session/MinutesCorrectionsPanel').MinutesCorrectionRow[];
 };
 
 type Props = {
@@ -84,9 +108,12 @@ const ATTACHABLE_CATEGORIES = [
     'business-for-the-day',
     'unassigned-business',
     'third-reading',
+    'approval-minutes',
+    'referred-measures',
 ] as const;
 
 const MEASURE_TYPES = ['proposed-ordinance', 'proposed-resolution', 'ordinance', 'resolution'];
+const ORDINANCE_MEASURE_TYPES = ['proposed-ordinance', 'ordinance'];
 
 export function AgendaBuilderToolbar({
     sessionId,
@@ -121,11 +148,15 @@ export function AgendaList({
     items: serverItems,
     documents = [],
     editable = false,
+    minutesConsideration = null,
+    applyCorrections = false,
 }: {
     sessionId: string;
     items: AgendaListItem[];
     documents?: DocumentOption[];
     editable?: boolean;
+    minutesConsideration?: MinutesConsideration | null;
+    applyCorrections?: boolean;
 }) {
     const { t } = useTranslations();
     const [items, setItems] = useState(serverItems);
@@ -250,10 +281,16 @@ export function AgendaList({
                                 sessionId={sessionId}
                                 item={item}
                                 items={items}
-                                documents={documents}
+                                documents={
+                                    item.category === 'approval-minutes'
+                                        ? (minutesConsideration?.documents ?? documents)
+                                        : documents
+                                }
                                 editable={editable}
                                 sortable={sortable}
                                 documented={documented}
+                                minutesConsideration={minutesConsideration}
+                                applyCorrections={applyCorrections}
                                 onMove={move}
                                 onView={(document) => setPreview(document)}
                             />
@@ -287,6 +324,8 @@ function AgendaRow({
     editable,
     sortable,
     documented,
+    minutesConsideration,
+    applyCorrections,
     onMove,
     onView,
 }: {
@@ -297,6 +336,8 @@ function AgendaRow({
     editable: boolean;
     sortable: boolean;
     documented: boolean;
+    minutesConsideration: MinutesConsideration | null;
+    applyCorrections: boolean;
     onMove: (itemId: string, direction: 'up' | 'down') => void;
     onView: (document: AgendaLinkedDocument) => void;
 }) {
@@ -307,6 +348,9 @@ function AgendaRow({
     const depth = nestingDepth(item, items);
     const attachable = editable && isAttachableHeading(item);
     const linked = item.document ?? null;
+    const isMinutesHeading = item.category === 'approval-minutes' && !item.document_id && !item.document;
+    const hasMinutesChild = items.some((row) => row.parent_id === item.id && Boolean(row.document_id || row.document));
+    const isMinutesPacket = item.category === 'approval-minutes' && Boolean(item.document_id || item.document);
     const { attributes, listeners, setNodeRef, setActivatorNodeRef, transform, transition, isDragging } = useSortable({
         id: item.id,
         disabled: !canDrag,
@@ -345,6 +389,12 @@ function AgendaRow({
             </span>
             <div className="min-w-0 flex-1">
                 <p className="flex items-center gap-2 text-sm font-medium text-ink">{item.title}</p>
+                {item.description ? (
+                    <p className="mt-0.5 text-xs whitespace-pre-wrap text-ink-muted">{item.description}</p>
+                ) : null}
+                {isMinutesHeading && editable && !hasMinutesChild ? (
+                    <p className="mt-0.5 text-xs text-ink-muted">{t('sessions.agenda_minutes_missing')}</p>
+                ) : null}
             </div>
             {documented ? (
                 <span className="flex shrink-0 items-center justify-end gap-2 sm:min-w-32">
@@ -355,8 +405,11 @@ function AgendaRow({
                         </Button>
                     ) : null}
                     {linked ? (
-                        <Button variant="link" size="sm" asChild>
-                            <Link href={`/documents/${linked.slug}`}>{t('sessions.open_document')}</Link>
+                        <Button variant="secondary" size="sm" asChild>
+                            <Link href={`/documents/${linked.slug}`}>
+                                <SquareArrowOutUpRight aria-hidden="true" strokeWidth={2} className="size-3.5" />
+                                {t('sessions.open_document')}
+                            </Link>
                         </Button>
                     ) : null}
                 </span>
@@ -374,7 +427,9 @@ function AgendaRow({
                             size="icon-sm"
                             variant="ghost"
                             onClick={() => setBindOpen(true)}
-                            aria-label={t('sessions.agenda_bind')}
+                            aria-label={
+                                isMinutesHeading ? t('sessions.agenda_bind_minutes') : t('sessions.agenda_bind')
+                            }
                         >
                             <Paperclip aria-hidden="true" strokeWidth={2} className="size-4" />
                         </Button>
@@ -386,11 +441,24 @@ function AgendaRow({
                             sessionId={sessionId}
                             heading={item}
                             documents={documents}
+                            minutesConsideration={isMinutesHeading ? minutesConsideration : null}
                             open={bindOpen}
                             onOpenChange={setBindOpen}
                         />
                     ) : null}
                 </span>
+            ) : null}
+            {applyCorrections && isMinutesPacket ? (
+                <div className="basis-full pt-2">
+                    <MinutesCorrectionsPanel
+                        sessionId={sessionId}
+                        agendaItemId={item.id}
+                        corrections={item.minutes_corrections ?? []}
+                        canApply
+                        compact
+                        t={t}
+                    />
+                </div>
             ) : null}
         </li>
     );
@@ -410,8 +478,11 @@ export function AgendaItemActions({
     onMove?: (itemId: string, direction: 'up' | 'down') => void;
 }) {
     const { t } = useTranslations();
+    const [confirmOpen, setConfirmOpen] = useState(false);
+    const [editOpen, setEditOpen] = useState(false);
+    const [processing, setProcessing] = useState(false);
 
-    if (locked || item.status === 'completed' || item.status === 'in-progress' || item.status === 'postponed') {
+    if (locked || item.status === 'completed' || item.status === 'in-progress' || item.status === 'postponed' || item.status === 'considered') {
         return null;
     }
 
@@ -454,11 +525,14 @@ export function AgendaItemActions({
     }
 
     function remove() {
-        if (!window.confirm(t('sessions.agenda_remove_confirm'))) {
-            return;
-        }
-
-        router.delete(`/sessions/${sessionId}/agenda/${item.id}`, { preserveScroll: true });
+        router.delete(`/sessions/${sessionId}/agenda/${item.id}`, {
+            preserveScroll: true,
+            onStart: () => setProcessing(true),
+            onFinish: () => {
+                setProcessing(false);
+                setConfirmOpen(false);
+            },
+        });
     }
 
     // No wrapper: the row reserves the column so the pills above and below a
@@ -489,13 +563,141 @@ export function AgendaItemActions({
                 type="button"
                 size="icon-sm"
                 variant="ghost"
-                onClick={remove}
+                onClick={() => setEditOpen(true)}
+                aria-label={t('sessions.agenda_edit')}
+            >
+                <Pencil aria-hidden="true" strokeWidth={2} className="size-4" />
+            </Button>
+            <Button
+                type="button"
+                size="icon-sm"
+                variant="ghost"
+                onClick={() => setConfirmOpen(true)}
                 aria-label={t('sessions.agenda_remove')}
                 className="hover:bg-critical-soft hover:text-critical"
             >
                 <Trash2 aria-hidden="true" strokeWidth={2} className="size-4" />
             </Button>
+
+            <EditAgendaItemDialog sessionId={sessionId} item={item} open={editOpen} onOpenChange={setEditOpen} />
+
+            <Dialog
+                open={confirmOpen}
+                onOpenChange={(open) => {
+                    if (!open && !processing) {
+                        setConfirmOpen(false);
+                    }
+                }}
+            >
+                <DialogContent
+                    title={t('sessions.agenda_remove_title')}
+                    description={t('sessions.agenda_remove_confirm', { title: item.title })}
+                >
+                    <DialogFooter className="mt-0">
+                        <Button
+                            type="button"
+                            variant="ghost"
+                            disabled={processing}
+                            onClick={() => setConfirmOpen(false)}
+                        >
+                            {t('sessions.cancel')}
+                        </Button>
+                        <Button type="button" variant="danger" disabled={processing} onClick={remove}>
+                            {t('sessions.agenda_remove')}
+                        </Button>
+                    </DialogFooter>
+                </DialogContent>
+            </Dialog>
         </>
+    );
+}
+
+function EditAgendaItemDialog({
+    sessionId,
+    item,
+    open,
+    onOpenChange,
+}: {
+    sessionId: string;
+    item: AgendaListItem;
+    open: boolean;
+    onOpenChange: (open: boolean) => void;
+}) {
+    const { t } = useTranslations();
+    const form = useForm({
+        title: item.title,
+        description: item.description ?? '',
+    });
+
+    useEffect(() => {
+        if (!open) {
+            return;
+        }
+
+        form.setData({
+            title: item.title,
+            description: item.description ?? '',
+        });
+        form.clearErrors();
+        // Refresh from the item when the dialog opens. `form` is a new object each render.
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [open, item.id, item.title, item.description]);
+
+    function submit(event: FormEvent) {
+        event.preventDefault();
+        form.transform((data) => ({
+            title: data.title.trim(),
+            description: data.description.trim() === '' ? null : data.description.trim(),
+        }));
+        form.put(`/sessions/${sessionId}/agenda/${item.id}`, {
+            preserveScroll: true,
+            onSuccess: () => onOpenChange(false),
+        });
+    }
+
+    return (
+        <Dialog open={open} onOpenChange={onOpenChange}>
+            <DialogContent title={t('sessions.agenda_edit_title')} description={t('sessions.agenda_edit_hint')}>
+                <form onSubmit={submit} className="space-y-4">
+                    <Field
+                        id={`agenda_edit_title_${item.id}`}
+                        label={t('sessions.agenda_item_title')}
+                        error={form.errors.title}
+                        required
+                    >
+                        <Input
+                            {...fieldAria(`agenda_edit_title_${item.id}`, { error: form.errors.title })}
+                            value={form.data.title}
+                            onChange={(event) => form.setData('title', event.target.value)}
+                        />
+                    </Field>
+                    <Field
+                        id={`agenda_edit_description_${item.id}`}
+                        label={t('sessions.agenda_item_description')}
+                        hint={t('sessions.agenda_item_description_hint')}
+                        error={form.errors.description}
+                    >
+                        <Textarea
+                            {...fieldAria(`agenda_edit_description_${item.id}`, {
+                                hint: t('sessions.agenda_item_description_hint'),
+                                error: form.errors.description,
+                            })}
+                            rows={4}
+                            value={form.data.description}
+                            onChange={(event) => form.setData('description', event.target.value)}
+                        />
+                    </Field>
+                    <DialogFooter>
+                        <Button type="button" variant="ghost" onClick={() => onOpenChange(false)}>
+                            {t('sessions.cancel')}
+                        </Button>
+                        <Button type="submit" variant="primary" disabled={form.processing || !form.data.title.trim()}>
+                            {form.processing ? t('sessions.saving') : t('sessions.agenda_edit_save')}
+                        </Button>
+                    </DialogFooter>
+                </form>
+            </DialogContent>
+        </Dialog>
     );
 }
 
@@ -585,19 +787,32 @@ function BindDocumentsDialog({
     sessionId,
     heading,
     documents,
+    minutesConsideration,
     open,
     onOpenChange,
 }: {
     sessionId: string;
     heading: AgendaListItem;
     documents: DocumentOption[];
+    minutesConsideration: MinutesConsideration | null;
     open: boolean;
     onOpenChange: (open: boolean) => void;
 }) {
     const { t } = useTranslations();
+    const minutes = heading.category === 'approval-minutes';
     const [query, setQuery] = useState('');
     const form = useForm({ document_ids: [] as string[] });
-    const eligible = useMemo(() => documentsForHeading(documents, heading.category ?? ''), [documents, heading.category]);
+    const uploadForm = useForm({
+        file: null as File | null,
+        title: minutesConsideration?.previous_session
+            ? t('sessions.agenda_minutes_title_default', { title: minutesConsideration.previous_session.title })
+            : '',
+        of_session_id: minutesConsideration?.previous_session?.id ?? '',
+    });
+    const eligible = useMemo(
+        () => documentsForHeading(documents, heading.category ?? ''),
+        [documents, heading.category],
+    );
     const visible = useMemo(() => {
         const needle = query.trim().toLowerCase();
 
@@ -637,22 +852,108 @@ function BindDocumentsDialog({
         });
     }
 
+    function submitUpload(event: FormEvent) {
+        event.preventDefault();
+
+        if (!uploadForm.data.file) {
+            return;
+        }
+
+        uploadForm.post(`/sessions/${sessionId}/agenda/${heading.id}/minutes`, {
+            forceFormData: true,
+            preserveScroll: true,
+            onSuccess: () => {
+                uploadForm.reset();
+                onOpenChange(false);
+            },
+        });
+    }
+
     return (
         <Dialog
             open={open}
             onOpenChange={(next) => {
                 if (!next) {
                     form.reset();
+                    uploadForm.reset();
                     setQuery('');
+                } else if (minutes && form.data.document_ids.length === 0) {
+                    form.setData('document_ids', minutesConsideration?.suggested_document_ids ?? []);
                 }
 
                 onOpenChange(next);
             }}
         >
-            <DialogContent title={t('sessions.agenda_bind_title')} description={t('sessions.agenda_bind_hint')}>
+            <DialogContent
+                title={minutes ? t('sessions.agenda_bind_minutes_title') : t('sessions.agenda_bind_title')}
+                description={minutes ? t('sessions.agenda_bind_minutes_hint') : t('sessions.agenda_bind_hint')}
+            >
+                {minutes ? (
+                    <form onSubmit={submitUpload} className="space-y-3 border-b border-line pb-4">
+                        <Field
+                            id={`minutes-file-${heading.id}`}
+                            label={t('sessions.agenda_minutes_file')}
+                            hint={t('sessions.agenda_minutes_file_hint')}
+                            error={uploadForm.errors.file}
+                            required
+                        >
+                            <FileDrop
+                                id={`minutes-file-${heading.id}`}
+                                file={uploadForm.data.file}
+                                onFileChange={(file) => {
+                                    uploadForm.setData('file', file);
+                                    uploadForm.clearErrors('file');
+                                }}
+                                accept="application/pdf,.pdf"
+                                invalid={Boolean(uploadForm.errors.file)}
+                                dropLabel={t('documents.file_drop')}
+                                browseLabel={t('documents.file_browse')}
+                                replaceLabel={t('documents.file_replace')}
+                                removeLabel={t('documents.file_remove')}
+                            />
+                        </Field>
+                        <Field id={`minutes-title-${heading.id}`} label={t('sessions.agenda_minutes_title')} error={uploadForm.errors.title}>
+                            <Input
+                                id={`minutes-title-${heading.id}`}
+                                value={uploadForm.data.title}
+                                onChange={(event) => uploadForm.setData('title', event.target.value)}
+                                placeholder={t('sessions.agenda_minutes_title_placeholder')}
+                            />
+                        </Field>
+                        {minutesConsideration && minutesConsideration.sessions.length > 0 ? (
+                            <Field id={`minutes-of-${heading.id}`} label={t('sessions.agenda_minutes_of_session')}>
+                                <Select
+                                    value={uploadForm.data.of_session_id || '__none'}
+                                    onValueChange={(value) =>
+                                        uploadForm.setData('of_session_id', value === '__none' ? '' : value)
+                                    }
+                                >
+                                    <SelectTrigger id={`minutes-of-${heading.id}`}>
+                                        <SelectValue placeholder={t('sessions.agenda_minutes_of_session')} />
+                                    </SelectTrigger>
+                                    <SelectContent>
+                                        <SelectItem value="__none">{t('sessions.agenda_no_document')}</SelectItem>
+                                        {minutesConsideration.sessions.map((row) => (
+                                            <SelectItem key={row.id} value={row.id}>
+                                                {row.session_number} — {row.title}
+                                            </SelectItem>
+                                        ))}
+                                    </SelectContent>
+                                </Select>
+                            </Field>
+                        ) : null}
+                        <DialogFooter>
+                            <Button type="submit" variant="secondary" disabled={uploadForm.processing || !uploadForm.data.file}>
+                                {uploadForm.processing ? t('sessions.saving') : t('sessions.agenda_minutes_upload_save')}
+                            </Button>
+                        </DialogFooter>
+                    </form>
+                ) : null}
                 <form onSubmit={submit} className="space-y-4">
                     {eligible.length === 0 ? (
-                        <p className="text-sm text-ink-muted">{t('sessions.agenda_bind_empty')}</p>
+                        <p className="text-sm text-ink-muted">
+                            {minutes ? t('sessions.agenda_bind_minutes_empty') : t('sessions.agenda_bind_empty')}
+                        </p>
                     ) : (
                         <>
                             <Field id={`bind-search-${heading.id}`} label={t('sessions.agenda_bind_search')}>
@@ -695,10 +996,21 @@ function BindDocumentsDialog({
                                                     <span className="min-w-0 flex-1">
                                                         <span className="block text-sm font-medium text-ink">
                                                             {document.title}
+                                                            {document.suggested ? (
+                                                                <span className="ml-2 text-xs font-normal text-accent">
+                                                                    {t('sessions.agenda_bind_minutes_suggested')}
+                                                                </span>
+                                                            ) : null}
                                                         </span>
                                                         {document.reference_number ? (
                                                             <span className="mt-0.5 block font-mono text-xs text-ink-faint">
                                                                 {document.reference_number}
+                                                            </span>
+                                                        ) : null}
+                                                        {document.source_session ? (
+                                                            <span className="mt-0.5 block text-xs text-ink-muted">
+                                                                {document.source_session.session_number} —{' '}
+                                                                {document.source_session.title}
                                                             </span>
                                                         ) : null}
                                                     </span>
@@ -754,6 +1066,7 @@ function positionFor(items: AgendaListItem[], id: UniqueIdentifier): number {
 const AGENDA_TONE: Record<string, StatusTone> = {
     pending: 'draft',
     'in-progress': 'live',
+    considered: 'review',
     completed: 'moving',
     postponed: 'review',
 };
@@ -773,6 +1086,10 @@ function agendaStatusLabel(status: string, t: (key: string) => string): string {
 
     if (status === 'completed') {
         return t('sessions.item_completed');
+    }
+
+    if (status === 'considered') {
+        return t('sessions.item_considered');
     }
 
     if (status === 'postponed') {
@@ -813,10 +1130,30 @@ function documentsForHeading(documents: DocumentOption[], category: string): Doc
         }
 
         if (category === 'third-reading') {
+            const isOrdinance =
+                document.document_type === undefined || ORDINANCE_MEASURE_TYPES.includes(document.document_type);
+
             return (
-                document.status === undefined ||
-                document.status === 'final-document' ||
-                (document.status === 'agenda-inclusion' && reading === 3)
+                isOrdinance &&
+                (document.status === undefined ||
+                    document.status === 'final-document' ||
+                    (document.status === 'agenda-inclusion' && reading === 3))
+            );
+        }
+
+        if (category === 'approval-minutes') {
+            return document.document_type === 'minutes' && (document.status === undefined || document.status === 'registered');
+        }
+
+        if (category === 'referred-measures') {
+            const isMeasure = document.document_type === undefined || MEASURE_TYPES.includes(document.document_type);
+
+            return (
+                isMeasure &&
+                (document.status === undefined ||
+                    document.status === 'committee-referral' ||
+                    document.status === 'committee-review' ||
+                    document.status === 'agenda-inclusion')
             );
         }
 

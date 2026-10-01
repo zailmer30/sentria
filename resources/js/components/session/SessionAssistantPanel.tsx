@@ -1,4 +1,5 @@
 import { AiContent } from '@/components/ai/AiContent';
+import { SessionFloorFab } from '@/components/session/SessionFloorTools';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { useTranslations } from '@/lib/i18n';
@@ -199,22 +200,22 @@ export function SessionAssistantPanel({
 
     return (
         <>
-            {!hideToggle ? (
-            <Button
-                type="button"
-                variant="primary"
-                size="floor"
-                className={cn(
-                    'session-assistant-toggle fixed right-4 bottom-4 z-40 min-w-14 rounded-[var(--radius-md)] shadow-[var(--shadow-md)] md:right-6 md:bottom-6',
-                    toggleClassName,
-                )}
-                onClick={() => setOpen(true)}
-                aria-haspopup="dialog"
-                aria-expanded={open}
-            >
-                <Sparkles className="size-5" aria-hidden />
-                <span className="hidden sm:inline">{t('sessions.assistant.open')}</span>
-            </Button>
+            {!hideToggle && !open ? (
+                <SessionFloorFab className={cn('session-assistant-toggle', toggleClassName)}>
+                    <Button
+                        type="button"
+                        variant="secondary"
+                        size="icon-floor"
+                        className="size-14 rounded-full border-line bg-surface text-accent shadow-[var(--shadow-lg)] [&_svg]:size-5"
+                        onClick={() => setOpen(true)}
+                        aria-haspopup="dialog"
+                        aria-expanded={open}
+                        aria-label={t('sessions.assistant.open')}
+                        title={t('sessions.assistant.open')}
+                    >
+                        <Sparkles aria-hidden strokeWidth={1.75} />
+                    </Button>
+                </SessionFloorFab>
             ) : null}
 
             {open ? (
@@ -230,7 +231,7 @@ export function SessionAssistantPanel({
                         role="dialog"
                         aria-modal="true"
                         aria-label={t('sessions.assistant.title')}
-                        className="session-assistant-panel relative flex h-full w-full max-w-md flex-col border-l border-line bg-canvas shadow-[var(--shadow-lg)]"
+                        className="session-assistant-panel relative flex h-full w-full max-w-md flex-col border-l border-line bg-canvas shadow-[var(--shadow-lg)] sm:rounded-l-[var(--radius-xl)]"
                     >
                         <header className="flex items-start justify-between gap-3 border-b border-line bg-surface px-4 py-4">
                             <div className="min-w-0">

@@ -66,7 +66,7 @@ class TranscriptController extends Controller
                 'status_label' => $session->status->label(),
                 'recording_enabled' => (bool) $session->recording_enabled,
             ],
-            'transcript' => $transcript ? $this->serialize($transcript) : null,
+            'transcript' => $transcript ? $this->serialize($transcript, $user) : null,
             'roster' => $speakers,
             'agenda_items' => $session->agendaItems()->orderBy('position')->get(['id', 'item_number', 'title'])->map(
                 fn ($item): array => [
@@ -127,6 +127,8 @@ class TranscriptController extends Controller
 
         $validated = $request->validated();
         $assigning = array_key_exists('speaker_id', $validated) || $request->boolean('gallery');
+        $actor = $this->requireUser($request);
+        $before = $this->segmentSnapshot($transcript, $segmentIndex);
 
         $updated = $this->transcripts->correctSegment(
             $transcript,
@@ -136,13 +138,18 @@ class TranscriptController extends Controller
                 'speaker_id' => $validated['speaker_id'] ?? null,
                 'gallery' => $request->boolean('gallery'),
             ],
+            $actor,
         );
+
+        $after = $this->segmentSnapshot($updated, $segmentIndex);
 
         $this->audit->record(
             event: $assigning ? 'transcript.speaker_assigned' : 'transcript.segment_corrected',
             category: 'session',
             auditable: $updated,
-            actor: $this->requireUser($request),
+            actor: $actor,
+            old: $before,
+            new: $after,
             context: [
                 'segment_index' => $segmentIndex,
                 'speaker_id' => $validated['speaker_id'] ?? null,
@@ -151,7 +158,20 @@ class TranscriptController extends Controller
         );
 
         return response()->json([
-            'transcript' => $this->serialize($updated),
+            'transcript' => $this->serialize($updated, $actor),
+        ]);
+    }
+
+    public function segmentEdits(
+        LegislativeSession $session,
+        Transcript $transcript,
+        int $segmentIndex,
+    ): JsonResponse {
+        abort_unless($transcript->session_id === $session->getKey(), 404);
+        $this->authorize('correct', $transcript);
+
+        return response()->json([
+            'edits' => $this->transcripts->segmentEdits($transcript, $segmentIndex),
         ]);
     }
 
@@ -182,21 +202,21 @@ class TranscriptController extends Controller
     /**
      * @return array<string, mixed>
      */
-    private function serialize(Transcript $transcript): array
+    private function serialize(Transcript $transcript, ?User $viewer = null): array
     {
         $startedAt = $transcript->getAttribute('started_at');
         $endedAt = $transcript->getAttribute('ended_at');
+        $rawSegments = is_array($transcript->segments) ? $transcript->segments : [];
+        $includeOriginals = $viewer instanceof User && $viewer->can('correct', $transcript);
 
-        return [
+        $payload = [
             'id' => $transcript->getKey(),
             'status' => $transcript->status,
             'processing_error' => $transcript->processing_error,
             'source' => $transcript->source,
             'language' => $transcript->language,
             'full_text' => $transcript->full_text,
-            'segments' => $this->transcripts->typedSegments(
-                is_array($transcript->segments) ? $transcript->segments : [],
-            ),
+            'segments' => $this->transcripts->typedSegments($rawSegments, $includeOriginals),
             'average_confidence' => $transcript->average_confidence,
             'duration_seconds' => $transcript->duration_seconds,
             'model' => $transcript->model,
@@ -209,5 +229,34 @@ class TranscriptController extends Controller
                 'title' => $transcript->agendaItem->title,
             ] : null,
         ];
+
+        if ($includeOriginals) {
+            $payload['corrections'] = $this->transcripts->corrections($rawSegments);
+        }
+
+        return $payload;
+    }
+
+    /**
+     * @return array{text: string, speaker: string|null, speaker_id: string|null, attributed: bool}|null
+     */
+    private function segmentSnapshot(Transcript $transcript, int $segmentIndex): ?array
+    {
+        $segments = is_array($transcript->segments) ? $transcript->segments : [];
+
+        foreach ($segments as $segment) {
+            if (! is_array($segment) || (int) ($segment['index'] ?? -1) !== $segmentIndex) {
+                continue;
+            }
+
+            return [
+                'text' => (string) ($segment['text'] ?? ''),
+                'speaker' => isset($segment['speaker']) ? (string) $segment['speaker'] : null,
+                'speaker_id' => isset($segment['speaker_id']) ? (string) $segment['speaker_id'] : null,
+                'attributed' => array_key_exists('attributed', $segment) ? (bool) $segment['attributed'] : true,
+            ];
+        }
+
+        return null;
     }
 }

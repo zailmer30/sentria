@@ -16,6 +16,13 @@ export type Organization = {
     locality: string;
 };
 
+export type Branding = {
+    logo_url: string | null;
+    accent: string;
+    plate: string;
+    plate_pattern: string;
+};
+
 export type AppNotification = {
     id: string;
     type: string;
@@ -37,6 +44,7 @@ export type PageProps = {
     flash: {
         success?: string | null;
         error?: string | null;
+        error_replacements?: Record<string, string | number> | null;
     };
     notifications: {
         unread_count: number;
@@ -44,6 +52,7 @@ export type PageProps = {
     locale: string;
     translations: Record<string, string>;
     organization: Organization;
+    branding: Branding;
     ai: {
         inherits_user_permissions: boolean;
         enabled: boolean;

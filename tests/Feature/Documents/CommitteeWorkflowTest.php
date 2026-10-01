@@ -33,6 +33,7 @@ function committeeActor(UserRole $role): User
 
 it('supports referral to report workflow for authorized roles', function (): void {
     $chair = committeeActor(UserRole::CommitteeChair);
+    $secretariat = committeeActor(UserRole::Secretariat);
     $document = Document::factory()->create();
     $committee = Committee::factory()->create();
 
@@ -58,6 +59,7 @@ it('supports referral to report workflow for authorized roles', function (): voi
         ->assertInertia(fn (Assert $page) => $page
             ->component('Documents/Show')
             ->where('can.createReport', true)
+            ->where('nextReportNumber', sprintf('CR-%d-001', now()->year))
             ->where('document.open_referral.id', $referral->getKey())
             ->where('document.open_referral.committee_id', $committee->getKey())
             ->where('document.reports', []));
@@ -69,11 +71,12 @@ it('supports referral to report workflow for authorized roles', function (): voi
             'subject_document_id' => $document->getKey(),
             'recommendation' => 'approve',
             'findings' => 'The committee recommends approval as proposed.',
-            'report_number' => 'CR-2026-001',
+            'report_number' => 'CR-1999-999',
         ])
         ->assertRedirect(route('documents.show', $document));
 
-    $report = CommitteeReport::query()->where('report_number', 'CR-2026-001')->firstOrFail();
+    $report = CommitteeReport::query()->where('committee_referral_id', $referral->getKey())->firstOrFail();
+    expect($report->report_number)->toBe(sprintf('CR-%d-001', now()->year));
     expect($report->status)->toBe('draft');
 
     $this->actingAs($chair)
@@ -96,6 +99,10 @@ it('supports referral to report workflow for authorized roles', function (): voi
     expect($report->fresh()->status)->toBe('chair-review');
 
     $this->actingAs($chair)
+        ->post(route('reports.submit', $report))
+        ->assertForbidden();
+
+    $this->actingAs($secretariat)
         ->post(route('reports.submit', $report))
         ->assertRedirect(route('documents.show', $document));
 

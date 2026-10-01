@@ -3,6 +3,8 @@
 namespace App\Services\Sessions;
 
 use App\Events\AgendaItemChanged;
+use App\Exceptions\TranslatedArgumentException;
+use App\Http\Resources\DocumentResource;
 use App\Models\AgendaItem;
 use App\Models\CommitteeReferral;
 use App\Models\Document;
@@ -10,9 +12,6 @@ use App\Models\LegislativeSession;
 use App\Models\User;
 use App\Services\Workflow\GuardedStateTransition;
 use App\States\Document\AgendaInclusion;
-use App\States\Document\CommitteeReferral as CommitteeReferralState;
-use App\States\Document\CommitteeReport as CommitteeReportState;
-use App\States\Document\CommitteeReview as CommitteeReviewState;
 use App\States\Session\InSession;
 use App\States\Session\Suspended;
 use Illuminate\Auth\Access\AuthorizationException;
@@ -33,7 +32,7 @@ class CalendarRoutingService
     ];
 
     /** @var list<string> */
-    private const ACTIVE_ITEM_STATUSES = ['pending', 'in-progress'];
+    private const ACTIVE_ITEM_STATUSES = ['pending', 'in-progress', 'considered'];
 
     /** @var array<string, bool> */
     private array $businessForTheDayOpen = [];
@@ -41,13 +40,11 @@ class CalendarRoutingService
     /** @var array<string, bool> */
     private array $thirdReadingOpen = [];
 
-    /** @var array<string, list<string>> */
-    private array $referredIdsBySession = [];
-
     public function __construct(
         private readonly AgendaService $agenda,
         private readonly HallDisplayService $hall,
         private readonly GuardedStateTransition $transitions,
+        private readonly FloorReferralService $floorReferrals,
     ) {}
 
     public function calendarSecondReading(LegislativeSession $session, AgendaItem $item, User $actor): AgendaItem
@@ -66,8 +63,21 @@ class CalendarRoutingService
             throw new InvalidArgumentException('sessions.calendar.no_bft_heading');
         }
 
-        return DB::transaction(function () use ($session, $item, $heading, $actor): AgendaItem {
+        $sameSitting = $this->isSameSittingFloorMeasure($item->document);
+
+        return DB::transaction(function () use ($session, $item, $heading, $actor, $sameSitting): AgendaItem {
             $this->ensureReadyForSecondReading($item->document, $actor, $session);
+
+            if ($this->isCommitteeReportsDocumentItem($session, $item) && $item->document instanceof Document) {
+                $placed = $this->placeAfterCommitteeHour($session, $item->document, $actor);
+                $item->update([
+                    'status' => 'completed',
+                    'completed_at' => now(),
+                ]);
+                $this->broadcastAgenda($session);
+
+                return $placed;
+            }
 
             $moved = $this->agenda->reparentUnderHeading(
                 $session,
@@ -77,13 +87,17 @@ class CalendarRoutingService
                 2,
             );
 
+            if ($sameSitting && $item->document instanceof Document) {
+                $this->closeSameSittingReferrals($item->document);
+            }
+
             $this->broadcastAgenda($session);
 
             return $moved;
         });
     }
 
-    public function postpone(LegislativeSession $session, AgendaItem $item, User $actor): AgendaItem
+    public function postpone(LegislativeSession $session, AgendaItem $item, User $actor, ?string $fromCategory = null): AgendaItem
     {
         if (! $actor->can('agenda.manage')) {
             throw new AuthorizationException('Missing permission [agenda.manage] for this action.');
@@ -97,7 +111,7 @@ class CalendarRoutingService
             throw new InvalidArgumentException('sessions.calendar.cannot_postpone');
         }
 
-        return $this->markPostponedAndCarry($session, $item, $actor);
+        return $this->markPostponedAndCarry($session, $item, $actor, $fromCategory);
     }
 
     public function undoPostpone(LegislativeSession $session, AgendaItem $item, User $actor): AgendaItem
@@ -124,9 +138,18 @@ class CalendarRoutingService
                 $carried->delete();
             }
 
+            if ($this->calendarPostponeShouldRelease($session, $item)) {
+                $item->delete();
+                $this->broadcastAgenda($session);
+
+                return $item;
+            }
+
             $item->update([
                 'status' => 'pending',
                 'postponed_at' => null,
+                'postponed_from_category' => null,
+                'postponed_from_parent_id' => null,
                 'carried_to_session_id' => null,
                 'carried_to_agenda_item_id' => null,
                 'started_at' => null,
@@ -150,12 +173,6 @@ class CalendarRoutingService
 
     public function consumeCarryQueue(LegislativeSession $session): void
     {
-        $heading = $this->agenda->attachableHeading($session, 'unfinished-business');
-
-        if (! $heading instanceof AgendaItem) {
-            return;
-        }
-
         $queued = AgendaItem::query()
             ->with('session')
             ->where('status', 'postponed')
@@ -177,6 +194,12 @@ class CalendarRoutingService
             $next = $this->nextSameTypeSitting($source);
 
             if ($next === null || $next->getKey() !== $session->getKey()) {
+                continue;
+            }
+
+            $heading = $this->agenda->attachableHeading($session, $this->carryHeadingCategory($item));
+
+            if (! $heading instanceof AgendaItem) {
                 continue;
             }
 
@@ -219,11 +242,18 @@ class CalendarRoutingService
             throw new AuthorizationException('Missing permission [agenda.manage] for this action.');
         }
 
-        if (! $this->isCalendarReadyMeasure($document, $session)) {
+        $sameSitting = $this->isSameSittingFloorMeasure($document);
+        $onCommitteeHour = $this->activeCommitteeHourItem($session, $document) instanceof AgendaItem;
+
+        if (! $onCommitteeHour) {
+            $this->agenda->assertManualPlenaryPlacement($session, $document);
+        }
+
+        if (! $sameSitting && ! $this->isCalendarReadyMeasure($document, $session) && ! $onCommitteeHour) {
             throw new InvalidArgumentException('sessions.calendar.cannot_second_reading');
         }
 
-        $existing = $this->activeItemForDocument($session, $document);
+        $existing = $this->calendarVehicleForDocument($session, $document);
 
         if ($existing instanceof AgendaItem) {
             return $this->calendarSecondReading($session, $existing, $actor);
@@ -239,13 +269,17 @@ class CalendarRoutingService
             throw new InvalidArgumentException('sessions.calendar.no_bft_heading');
         }
 
-        return DB::transaction(function () use ($session, $document, $heading, $actor): AgendaItem {
+        return DB::transaction(function () use ($session, $document, $heading, $actor, $sameSitting): AgendaItem {
             $this->ensureReadyForSecondReading($document, $actor, $session);
 
             $item = $this->agenda->includeDocument($session, $document->fresh() ?? $document, $actor, 2, $heading);
 
             if (! $item instanceof AgendaItem) {
                 throw new InvalidArgumentException('sessions.calendar.cannot_second_reading');
+            }
+
+            if ($sameSitting) {
+                $this->closeSameSittingReferrals($document);
             }
 
             $this->broadcastAgenda($session);
@@ -272,6 +306,10 @@ class CalendarRoutingService
         }
 
         $session->loadMissing('agendaItems');
+
+        if (! $document->document_type->requiresThirdReading()) {
+            throw new InvalidArgumentException('sessions.calendar.resolutions_skip_third_reading');
+        }
 
         if (! $this->documentPassedSecondReadingThisSitting($session, $document)) {
             throw new InvalidArgumentException('sessions.calendar.cannot_third_reading');
@@ -333,7 +371,11 @@ class CalendarRoutingService
     {
         $document = $item->document;
 
-        if (! $document instanceof Document || ! $this->agenda->secondReadingVotePassed($item)) {
+        if (! $document instanceof Document || ! $document->document_type->requiresThirdReading()) {
+            return;
+        }
+
+        if (! $this->agenda->secondReadingVotePassed($item)) {
             return;
         }
 
@@ -355,6 +397,12 @@ class CalendarRoutingService
     public function allowsThirdReading(LegislativeSession $session, AgendaItem $item): bool
     {
         if ($item->session_id !== $session->getKey() || $item->document_id === null || $item->status === 'postponed') {
+            return false;
+        }
+
+        $item->loadMissing('document');
+
+        if (! $item->document instanceof Document || ! $item->document->document_type->requiresThirdReading()) {
             return false;
         }
 
@@ -408,7 +456,7 @@ class CalendarRoutingService
 
     public function postponeDocument(LegislativeSession $session, Document $document, User $actor): AgendaItem
     {
-        $existing = $this->activeItemForDocument($session, $document);
+        $existing = $this->calendarVehicleForDocument($session, $document);
 
         if ($existing instanceof AgendaItem) {
             return $this->postpone($session, $existing, $actor);
@@ -422,7 +470,7 @@ class CalendarRoutingService
             throw new InvalidArgumentException('sessions.calendar.postpone_not_live');
         }
 
-        if (! $this->isCalendarReadyMeasure($document, $session)) {
+        if (! $this->isSameSittingFloorMeasure($document) && ! $this->isCalendarReadyMeasure($document, $session)) {
             throw new InvalidArgumentException('sessions.calendar.cannot_postpone');
         }
 
@@ -439,8 +487,84 @@ class CalendarRoutingService
                 throw new InvalidArgumentException('sessions.calendar.cannot_postpone');
             }
 
-            return $this->postpone($session, $item, $actor);
+            return $this->postpone($session, $item, $actor, 'calendar');
         });
+    }
+
+    /**
+     * @param  list<array{agenda_item_id?: string|null, document_id?: string|null}>  $items
+     */
+    public function bulkRoute(LegislativeSession $session, string $action, array $items, User $actor): int
+    {
+        if (! $actor->can('agenda.manage')) {
+            throw new AuthorizationException('Missing permission [agenda.manage] for this action.');
+        }
+
+        if ($items === []) {
+            throw new InvalidArgumentException('sessions.calendar.bulk_empty');
+        }
+
+        return DB::transaction(function () use ($session, $action, $items, $actor): int {
+            if ($action === 'second-reading' || $action === 'postpone') {
+                $this->rejectMeasuresScheduledForHearing($session, $action, $items);
+            }
+
+            $count = 0;
+
+            foreach ($items as $payload) {
+                $this->routeOne($session, $action, $payload, $actor);
+                $count++;
+                $session->unsetRelation('agendaItems');
+            }
+
+            return $count;
+        });
+    }
+
+    /**
+     * @param  array{agenda_item_id?: string|null, document_id?: string|null}  $payload
+     */
+    private function routeOne(LegislativeSession $session, string $action, array $payload, User $actor): void
+    {
+        $agendaItemId = $payload['agenda_item_id'] ?? null;
+
+        if (is_string($agendaItemId) && $agendaItemId !== '') {
+            $item = AgendaItem::query()
+                ->where('session_id', $session->getKey())
+                ->whereKey($agendaItemId)
+                ->first();
+
+            if (! $item instanceof AgendaItem) {
+                throw new InvalidArgumentException('sessions.calendar.bulk_item_missing');
+            }
+
+            match ($action) {
+                'second-reading' => $this->calendarSecondReading($session, $item, $actor),
+                'postpone' => $this->postpone($session, $item, $actor),
+                'third-reading' => $this->calendarThirdReading($session, $item, $actor),
+                'undo' => $this->undoPostpone($session, $item, $actor),
+                default => throw new InvalidArgumentException('sessions.calendar.bulk_unknown_action'),
+            };
+
+            return;
+        }
+
+        $documentId = $payload['document_id'] ?? null;
+        $document = is_string($documentId) && $documentId !== ''
+            ? Document::query()->find($documentId)
+            : null;
+
+        if (! $document instanceof Document) {
+            throw new InvalidArgumentException('sessions.calendar.bulk_item_missing');
+        }
+
+        match ($action) {
+            'second-reading' => $this->placeDocumentOnSecondReading($session, $document, $actor),
+            'postpone' => $this->postponeDocument($session, $document, $actor),
+            'third-reading' => $this->placeDocumentOnThirdReading($session, $document, $actor),
+            'undo' => throw new InvalidArgumentException('sessions.calendar.not_postponed'),
+            default => throw new InvalidArgumentException('sessions.calendar.bulk_unknown_action'),
+        };
     }
 
     /**
@@ -448,7 +572,10 @@ class CalendarRoutingService
      */
     public function docket(LegislativeSession $session, User $viewer): array
     {
-        $session->loadMissing('agendaItems.document');
+        $session->loadMissing([
+            'agendaItems.document.committee',
+            'agendaItems.document.referrals.committee',
+        ]);
 
         $rows = [];
         $seenDocuments = [];
@@ -465,28 +592,72 @@ class CalendarRoutingService
                 continue;
             }
 
-            $flags = $this->actionFlags($session, $item, $viewer);
+            $referFlags = $this->referralDocketFlags($session, $item, $viewer);
 
-            if ($flags['can_second_reading'] || $flags['can_postpone'] || $flags['can_undo'] || $flags['can_third_reading'] || $flags['placed_on_third_reading'] || $item->status === 'postponed') {
-                $rows[] = $this->docketRow($item, $item->document, $flags);
+            if ($this->listsFirstReadingOnDocket($session, $item) && $item->status !== 'postponed') {
+                $rows[] = $this->docketRow(
+                    $item,
+                    $item->document,
+                    [
+                        ...$this->firstReadingDocketFlags($session, $item, $canManage, $bftOpen, $live),
+                        ...$referFlags,
+                    ],
+                    bindToAgendaItem: false,
+                );
                 $seenDocuments[$item->document_id] = true;
 
                 continue;
             }
 
-            if (! $this->listsReferredFirstReading($session, $item)) {
+            if ($this->listsReferredMeasuresOnDocket($session, $item) && $item->status !== 'postponed') {
+                $rows[] = $this->docketRow(
+                    $item,
+                    $item->document,
+                    [
+                        'can_second_reading' => false,
+                        'can_postpone' => false,
+                        'can_undo' => false,
+                        'can_third_reading' => false,
+                        'placed_on_third_reading' => false,
+                        'carried_to' => null,
+                        ...$referFlags,
+                    ],
+                    bindToAgendaItem: false,
+                );
+                $seenDocuments[$item->document_id] = true;
+
                 continue;
             }
 
-            $rows[] = $this->docketRow($item, $item->document, [
-                'can_second_reading' => $canManage && $bftOpen,
-                'can_postpone' => $canManage && $live,
-                'can_undo' => false,
-                'can_third_reading' => false,
-                'placed_on_third_reading' => false,
-                'carried_to' => null,
-            ], bindToAgendaItem: false);
-            $seenDocuments[$item->document_id] = true;
+            if ($this->listsCommitteeHourOnDocket($session, $item) && $item->status !== 'postponed') {
+                $rows[] = $this->docketRow(
+                    $item,
+                    $item->document,
+                    [
+                        'can_second_reading' => $canManage && $this->allowsSecondReading($session, $item),
+                        'can_postpone' => $canManage && $live && $this->allowsPostpone($session, $item),
+                        'can_undo' => false,
+                        'can_third_reading' => false,
+                        'placed_on_third_reading' => false,
+                        'carried_to' => null,
+                        ...$referFlags,
+                    ],
+                    bindToAgendaItem: false,
+                );
+                $seenDocuments[$item->document_id] = true;
+
+                continue;
+            }
+
+            $flags = [
+                ...$this->actionFlags($session, $item, $viewer),
+                ...$referFlags,
+            ];
+
+            if ($flags['can_second_reading'] || $flags['can_postpone'] || $flags['can_undo'] || $flags['can_third_reading'] || $flags['placed_on_third_reading'] || $flags['can_refer'] || $flags['can_edit_referral'] || $item->status === 'postponed') {
+                $rows[] = $this->docketRow($item, $item->document, $flags);
+                $seenDocuments[$item->document_id] = true;
+            }
         }
 
         return $rows;
@@ -506,12 +677,24 @@ class CalendarRoutingService
             return false;
         }
 
+        if ($this->isSameSittingFloorMeasure($item->document)) {
+            if ($this->isBusinessForTheDayItem($session, $item)) {
+                return false;
+            }
+
+            return $this->businessForTheDayIsOpen($session);
+        }
+
         if ($this->isUnfinishedDocumentItem($session, $item) || $this->isBusinessForTheDayItem($session, $item)) {
             return false;
         }
 
         if ($this->isFirstReadingItem($session, $item) && ! $this->firstReadingSectionIsPast($session)) {
             return false;
+        }
+
+        if ($this->isCommitteeReportsDocumentItem($session, $item)) {
+            return $this->businessForTheDayIsOpen($session);
         }
 
         if (! $this->isCalendarReadyMeasure($item->document, $session)) {
@@ -551,8 +734,13 @@ class CalendarRoutingService
             return false;
         }
 
+        if ($this->isCommitteeReportsDocumentItem($session, $item)) {
+            return true;
+        }
+
         if ($this->isUnassignedDocumentItem($session, $item)) {
-            return $this->isCalendarReadyMeasure($item->document, $session);
+            return $this->isCalendarReadyMeasure($item->document, $session)
+                || $this->isSameSittingFloorMeasure($item->document);
         }
 
         if ($this->isCalendarReadyMeasure($item->document, $session)) {
@@ -632,23 +820,29 @@ class CalendarRoutingService
             ->first();
     }
 
-    private function markPostponedAndCarry(LegislativeSession $session, AgendaItem $item, ?User $actor): AgendaItem
+    private function markPostponedAndCarry(LegislativeSession $session, AgendaItem $item, ?User $actor, ?string $fromCategory = null): AgendaItem
     {
-        return DB::transaction(function () use ($session, $item, $actor): AgendaItem {
+        return DB::transaction(function () use ($session, $item, $actor, $fromCategory): AgendaItem {
             $wasCurrent = $item->status === 'in-progress';
+
+            $isCommitteeReport = $this->isCommitteeReportsDocumentItem($session, $item);
 
             $item->update([
                 'status' => 'postponed',
                 'postponed_at' => now(),
-                'postponed_from_category' => $this->originCategory($session, $item),
+                'postponed_from_category' => $isCommitteeReport
+                    ? 'committee-reports'
+                    : ($fromCategory ?? $this->originCategory($session, $item)),
                 'postponed_from_parent_id' => $item->parent_id,
                 'completed_at' => now(),
             ]);
 
-            $this->ensureReadyForSecondReading($item->document, $actor, $session);
+            if (! $isCommitteeReport) {
+                $this->ensureReadyForSecondReading($item->document, $actor, $session);
+            }
 
             if ($wasCurrent) {
-                $this->startNextPending($session);
+                $this->startNextPending($session, $item);
             }
 
             $this->carryToNextSitting($item->fresh() ?? $item, $actor);
@@ -672,7 +866,7 @@ class CalendarRoutingService
             return;
         }
 
-        $heading = $this->agenda->attachableHeading($next, 'unfinished-business');
+        $heading = $this->agenda->attachableHeading($next, $this->carryHeadingCategory($item));
 
         if (! $heading instanceof AgendaItem) {
             return;
@@ -689,11 +883,13 @@ class CalendarRoutingService
             return;
         }
 
+        $reading = $heading->category === 'committee-reports' ? null : 2;
+
         $placed = $this->agenda->includeDocument(
             $target,
             $document,
             $actor ?? $this->agendaManagerFor($target) ?? $this->fallbackActor($from),
-            2,
+            $reading,
             $heading,
             authorize: false,
         );
@@ -711,7 +907,7 @@ class CalendarRoutingService
             return;
         }
 
-        if ($row->reading_number !== 2) {
+        if ($heading->category !== 'committee-reports' && $row->reading_number !== 2) {
             $row->update([
                 'reading_number' => 2,
                 'requires_vote' => true,
@@ -722,6 +918,38 @@ class CalendarRoutingService
             'carried_to_session_id' => $target->getKey(),
             'carried_to_agenda_item_id' => $row->getKey(),
         ]);
+    }
+
+    /**
+     * After Committee Hour adopts a favorable report, park the measure under
+     * this sitting's Business for the Day even if that heading is not yet current.
+     */
+    public function placeAfterCommitteeHour(LegislativeSession $session, Document $document, User $actor): AgendaItem
+    {
+        $heading = $this->agenda->attachableHeading($session, 'business-for-the-day');
+
+        if (! $heading instanceof AgendaItem) {
+            throw new InvalidArgumentException('sessions.calendar.no_bft_heading');
+        }
+
+        return DB::transaction(function () use ($session, $document, $heading, $actor): AgendaItem {
+            $this->ensureReadyForSecondReading($document, $actor, $session);
+
+            $item = $this->agenda->includeDocument(
+                $session,
+                $document->fresh() ?? $document,
+                $actor,
+                2,
+                $heading,
+                authorize: false,
+            );
+
+            if (! $item instanceof AgendaItem) {
+                throw new InvalidArgumentException('sessions.calendar.cannot_second_reading');
+            }
+
+            return $item;
+        });
     }
 
     private function ensureReadyForSecondReading(?Document $document, ?User $actor, LegislativeSession $session): void
@@ -782,11 +1010,18 @@ class CalendarRoutingService
         $this->transitions->transition($document, AgendaInclusion::class, $transitionActor);
     }
 
-    private function startNextPending(LegislativeSession $session): void
+    private function startNextPending(LegislativeSession $session, ?AgendaItem $left = null): void
     {
         $this->hall->clearForAgendaAdvance($session);
 
-        $next = $this->agenda->nextPendingItem($session);
+        $next = null;
+
+        if ($left instanceof AgendaItem) {
+            $heading = $this->agenda->headingScope($left);
+            $next = $this->agenda->firstConsideredMeasure($session, $heading);
+        }
+
+        $next ??= $this->agenda->nextPendingItem($session);
 
         if (! $next instanceof AgendaItem) {
             return;
@@ -794,7 +1029,8 @@ class CalendarRoutingService
 
         $next->update([
             'status' => 'in-progress',
-            'started_at' => now(),
+            'started_at' => $next->started_at ?? now(),
+            'completed_at' => null,
         ]);
     }
 
@@ -832,80 +1068,206 @@ class CalendarRoutingService
             return false;
         }
 
-        if ($document->status instanceof CommitteeReportState) {
-            return true;
-        }
-
-        if ($document->status instanceof AgendaInclusion && $document->current_reading === 2) {
-            return true;
-        }
-
-        return $session instanceof LegislativeSession
-            && $this->wasReferredThisSitting($session, $document);
-    }
-
-    private function wasReferredThisSitting(LegislativeSession $session, Document $document): bool
-    {
-        $referralOnSitting = in_array($document->getKey(), $this->referredDocumentIds($session), true);
-
-        if ($referralOnSitting) {
-            return true;
-        }
-
-        if (! $this->hasFirstReadingItem($session, $document)) {
-            return false;
-        }
-
-        $status = $document->status;
-
-        return $document->committee_id !== null
-            || $status instanceof CommitteeReferralState
-            || $status instanceof CommitteeReviewState
-            || $status instanceof CommitteeReportState;
-    }
-
-    private function hasFirstReadingItem(LegislativeSession $session, Document $document): bool
-    {
-        return $session->agendaItems->contains(
-            fn (AgendaItem $item): bool => $item->document_id === $document->getKey()
-                && $this->isFirstReadingItem($session, $item),
-        );
+        return $document->status instanceof AgendaInclusion && $document->current_reading === 2;
     }
 
     /**
-     * @return list<string>
+     * First-reading measures on this sitting stay on the calendar list from
+     * the opening gavel. Second reading unlocks after Committee Hour.
      */
-    private function referredDocumentIds(LegislativeSession $session): array
-    {
-        $key = $session->getKey();
-
-        if (! array_key_exists($key, $this->referredIdsBySession)) {
-            $this->referredIdsBySession[$key] = CommitteeReferral::query()
-                ->where('session_id', $session->getKey())
-                ->pluck('document_id')
-                ->all();
-        }
-
-        return $this->referredIdsBySession[$key];
-    }
-
-    private function listsReferredFirstReading(LegislativeSession $session, AgendaItem $item): bool
+    private function listsFirstReadingOnDocket(LegislativeSession $session, AgendaItem $item): bool
     {
         $document = $item->document;
 
-        if (! $document instanceof Document || ! $this->isFirstReadingItem($session, $item)) {
+        if (! $document instanceof Document || ! $document->document_type->isMeasure()) {
             return false;
         }
 
-        if ($this->sessionIsLive($session) && ! $this->firstReadingSectionIsPast($session)) {
-            return false;
-        }
-
-        if (! $this->wasReferredThisSitting($session, $document)) {
+        if (! $this->isFirstReadingItem($session, $item)) {
             return false;
         }
 
         return ! $this->documentAlreadyRoutedOnSitting($session, $document->getKey());
+    }
+
+    private function listsReferredMeasuresOnDocket(LegislativeSession $session, AgendaItem $item): bool
+    {
+        $document = $item->document;
+
+        if (! $document instanceof Document || ! $document->document_type->isMeasure()) {
+            return false;
+        }
+
+        return $item->category === 'referred-measures'
+            || $this->itemSitsUnder($session, $item, 'referred-measures');
+    }
+
+    /**
+     * Measures queued under Committee Hour / Reports stay on the list of
+     * measures. The body decides whether a reported measure proceeds to
+     * second reading, so that action stays available.
+     */
+    private function listsCommitteeHourOnDocket(LegislativeSession $session, AgendaItem $item): bool
+    {
+        $document = $item->document;
+
+        if (! $document instanceof Document || ! $document->document_type->isMeasure()) {
+            return false;
+        }
+
+        if (! in_array($item->status, self::ACTIVE_ITEM_STATUSES, true)) {
+            return false;
+        }
+
+        return $item->category === 'committee-reports'
+            || $this->itemSitsUnder($session, $item, 'committee-reports');
+    }
+
+    /**
+     * @return array{
+     *     can_second_reading: bool,
+     *     can_postpone: bool,
+     *     can_undo: bool,
+     *     can_third_reading: bool,
+     *     placed_on_third_reading: bool,
+     *     carried_to: null
+     * }
+     */
+    private function firstReadingDocketFlags(
+        LegislativeSession $session,
+        AgendaItem $item,
+        bool $canManage,
+        bool $bftOpen,
+        bool $live,
+    ): array {
+        $sameSitting = $this->isSameSittingFloorMeasure($item->document);
+
+        return [
+            'can_second_reading' => $canManage && $sameSitting && $bftOpen,
+            'can_postpone' => $canManage && $live && $sameSitting,
+            'can_undo' => false,
+            'can_third_reading' => false,
+            'placed_on_third_reading' => false,
+            'carried_to' => null,
+        ];
+    }
+
+    /**
+     * A dated floor referral is waiting on a committee hearing. Second reading
+     * and unfinished business both stay closed until that hearing is done.
+     *
+     * @param  list<array{agenda_item_id?: string|null, document_id?: string|null}>  $items
+     */
+    private function rejectMeasuresScheduledForHearing(LegislativeSession $session, string $action, array $items): void
+    {
+        $position = 0;
+
+        foreach ($items as $payload) {
+            $position++;
+            $document = $this->documentForBulkPayload($session, $payload);
+
+            if (! $document instanceof Document || ! $this->isScheduledForCommitteeHearing($document)) {
+                continue;
+            }
+
+            throw new TranslatedArgumentException(
+                $action === 'postpone'
+                    ? 'sessions.calendar.bulk_hearing_blocks_postpone'
+                    : 'sessions.calendar.bulk_hearing_blocks_second_reading',
+                [
+                    'number' => $position,
+                    'title' => $document->title,
+                ],
+            );
+        }
+    }
+
+    /**
+     * @param  array{agenda_item_id?: string|null, document_id?: string|null}  $payload
+     */
+    private function documentForBulkPayload(LegislativeSession $session, array $payload): ?Document
+    {
+        $agendaItemId = $payload['agenda_item_id'] ?? null;
+
+        if (is_string($agendaItemId) && $agendaItemId !== '') {
+            $item = AgendaItem::query()
+                ->with('document')
+                ->where('session_id', $session->getKey())
+                ->whereKey($agendaItemId)
+                ->first();
+
+            return $item?->document;
+        }
+
+        $documentId = $payload['document_id'] ?? null;
+
+        if (! is_string($documentId) || $documentId === '') {
+            return null;
+        }
+
+        return Document::query()->find($documentId);
+    }
+
+    /**
+     * An open referral with a meeting date, and with the hearing not waived on
+     * the first Refer, is the pile that Prepare Agenda places on a hearing.
+     */
+    private function isScheduledForCommitteeHearing(Document $document): bool
+    {
+        return CommitteeReferral::query()
+            ->where('document_id', $document->getKey())
+            ->where('hearing_waived', false)
+            ->whereNotNull('meeting_on')
+            ->whereNull('completed_at')
+            ->whereIn('status', ['pending', 'in-review'])
+            ->exists();
+    }
+
+    /**
+     * A floor referral with no meeting date stays on the plenary calendar.
+     * The flag is fixed on the first Refer; editing the date later does not
+     * send the measure to a hearing.
+     */
+    private function isSameSittingFloorMeasure(?Document $document): bool
+    {
+        if (! $document instanceof Document || ! $document->document_type->isMeasure()) {
+            return false;
+        }
+
+        return CommitteeReferral::query()
+            ->where('document_id', $document->getKey())
+            ->where('hearing_waived', true)
+            ->whereNull('completed_at')
+            ->whereIn('status', ['pending', 'in-review'])
+            ->exists();
+    }
+
+    private function closeSameSittingReferrals(Document $document): void
+    {
+        CommitteeReferral::query()
+            ->where('document_id', $document->getKey())
+            ->where('hearing_waived', true)
+            ->whereNull('completed_at')
+            ->update([
+                'status' => 'closed',
+                'completed_at' => now(),
+            ]);
+    }
+
+    /**
+     * @return array{
+     *     can_refer: bool,
+     *     can_edit_referral: bool,
+     *     referral_agenda_item_id: string|null
+     * }
+     */
+    private function referralDocketFlags(LegislativeSession $session, AgendaItem $item, User $viewer): array
+    {
+        return [
+            'can_refer' => $this->floorReferrals->allowsRefer($session, $item, $viewer),
+            'can_edit_referral' => $this->floorReferrals->allowsEdit($session, $item, $viewer),
+            'referral_agenda_item_id' => $item->getKey(),
+        ];
     }
 
     private function firstReadingSectionIsPast(LegislativeSession $session): bool
@@ -954,6 +1316,9 @@ class CalendarRoutingService
      *     can_undo: bool,
      *     can_third_reading: bool,
      *     placed_on_third_reading?: bool,
+     *     can_refer?: bool,
+     *     can_edit_referral?: bool,
+     *     referral_agenda_item_id?: string|null,
      *     carried_to: array{id: string, session_number: string, title: string}|null
      * }  $flags
      * @return array<string, mixed>
@@ -973,10 +1338,17 @@ class CalendarRoutingService
             'can_undo' => $flags['can_undo'],
             'can_third_reading' => $flags['can_third_reading'] ?? false,
             'placed_on_third_reading' => $flags['placed_on_third_reading'] ?? false,
+            'can_refer' => $flags['can_refer'] ?? false,
+            'can_edit_referral' => $flags['can_edit_referral'] ?? false,
+            'referral_agenda_item_id' => $flags['referral_agenda_item_id'] ?? ($bindToAgendaItem ? $item->getKey() : null),
             'carried_to' => $flags['carried_to'],
             'document' => $document ? [
                 'title' => $document->title,
                 'slug' => $document->slug,
+                'status' => $document->status->getValue(),
+                'committee_id' => $document->committee_id,
+                'committee' => $document->committee?->name,
+                'open_referral' => DocumentResource::openReferral($document),
             ] : null,
         ];
     }
@@ -997,6 +1369,22 @@ class CalendarRoutingService
             ->whereIn('status', self::ACTIVE_ITEM_STATUSES)
             ->orderBy('position')
             ->first();
+    }
+
+    /**
+     * First-reading rows stay on heading 6. Calendar routing creates a new
+     * vehicle under Business for the Day or Unfinished Business instead of
+     * reparenting the item still on the floor.
+     */
+    private function calendarVehicleForDocument(LegislativeSession $session, Document $document): ?AgendaItem
+    {
+        $existing = $this->activeItemForDocument($session, $document);
+
+        if (! $existing instanceof AgendaItem || $this->isFirstReadingItem($session, $existing)) {
+            return null;
+        }
+
+        return $existing;
     }
 
     private function isThirdReadingItem(LegislativeSession $session, AgendaItem $item): bool
@@ -1040,6 +1428,32 @@ class CalendarRoutingService
         return $this->itemSitsUnder($session, $item, 'unassigned-business');
     }
 
+    /**
+     * Calendar postpone of a referred first-reading measure parks a temporary
+     * row under Unassigned Business so it can be carried. Undo should remove
+     * that row, not restore the measure there.
+     */
+    private function calendarPostponeShouldRelease(LegislativeSession $session, AgendaItem $item): bool
+    {
+        if (($item->getAttributes()['postponed_from_category'] ?? null) === 'calendar') {
+            return true;
+        }
+
+        if ($item->document_id === null || ! $this->isUnassignedDocumentItem($session, $item)) {
+            return false;
+        }
+
+        $session->loadMissing('agendaItems');
+
+        return $session->agendaItems->contains(
+            function (AgendaItem $other) use ($session, $item): bool {
+                return $other->getKey() !== $item->getKey()
+                    && $other->document_id === $item->document_id
+                    && $this->isFirstReadingItem($session, $other);
+            },
+        );
+    }
+
     private function isBusinessForTheDayItem(LegislativeSession $session, AgendaItem $item): bool
     {
         return $this->itemSitsUnder($session, $item, 'business-for-the-day')
@@ -1079,13 +1493,51 @@ class CalendarRoutingService
         return 'unfinished-business';
     }
 
+    private function carryHeadingCategory(AgendaItem $item): string
+    {
+        $from = $item->getAttributes()['postponed_from_category'] ?? null;
+
+        if ($from === 'committee-reports' || $item->category === 'committee-reports') {
+            return 'committee-reports';
+        }
+
+        return 'unfinished-business';
+    }
+
+    private function activeCommitteeHourItem(LegislativeSession $session, Document $document): ?AgendaItem
+    {
+        $session->loadMissing('agendaItems');
+
+        $item = $session->agendaItems->first(function (AgendaItem $row) use ($session, $document): bool {
+            return $row->document_id === $document->getKey()
+                && in_array($row->status, self::ACTIVE_ITEM_STATUSES, true)
+                && $this->isCommitteeReportsDocumentItem($session, $row);
+        });
+
+        return $item instanceof AgendaItem ? $item : null;
+    }
+
+    private function isCommitteeReportsDocumentItem(LegislativeSession $session, AgendaItem $item): bool
+    {
+        if ($item->document_id === null) {
+            return false;
+        }
+
+        return $item->category === 'committee-reports'
+            || $this->itemSitsUnder($session, $item, 'committee-reports');
+    }
+
     private function secondReadingBlockReason(LegislativeSession $session, AgendaItem $item): string
     {
         if ($this->isUnfinishedDocumentItem($session, $item) || $this->isBusinessForTheDayItem($session, $item)) {
             return 'sessions.calendar.cannot_second_reading';
         }
 
-        if (! $this->isCalendarReadyMeasure($item->document, $session)) {
+        if ($this->isCommitteeReportsDocumentItem($session, $item) && ! $this->businessForTheDayIsOpen($session)) {
+            return 'sessions.calendar.bft_closed';
+        }
+
+        if (! $this->isCalendarReadyMeasure($item->document, $session) && ! $this->isCommitteeReportsDocumentItem($session, $item)) {
             return 'sessions.calendar.cannot_second_reading';
         }
 

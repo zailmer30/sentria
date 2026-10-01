@@ -48,8 +48,8 @@ type DraftPayload = {
     document_type: string;
     confidentiality: string;
     abstract: string;
+    external_author: string;
     enacting_clause: string;
-    proposed_effectivity: number | '';
     explanatory_note: string;
     committee_id: string;
     reference_number: string;
@@ -81,8 +81,8 @@ export function SubmitDocumentDialog({
         document_type: defaultType,
         confidentiality: defaultConfidentiality,
         abstract: '',
+        external_author: '',
         enacting_clause: '',
-        proposed_effectivity: 10 as number | '',
         explanatory_note: '',
         committee_id: '',
         reference_number: documentTypes[0]?.next_reference ?? '',
@@ -120,8 +120,8 @@ export function SubmitDocumentDialog({
             confidentiality:
                 confidentialityLevels.find((level) => level.value === draft?.confidentiality)?.value ?? defaultConfidentiality,
             abstract: draft?.abstract ?? '',
+            external_author: draft?.external_author ?? '',
             enacting_clause: draft?.enacting_clause ?? '',
-            proposed_effectivity: draft?.proposed_effectivity ?? 10,
             explanatory_note: draft?.explanatory_note ?? '',
             committee_id: committees.some((committee) => committee.id === draft?.committee_id) ? (draft?.committee_id ?? '') : '',
             reference_number: restoredType?.next_reference ?? documentTypes[0]?.next_reference ?? '',
@@ -183,8 +183,8 @@ export function SubmitDocumentDialog({
             document_type: form.data.document_type,
             confidentiality: form.data.confidentiality,
             abstract: form.data.abstract,
+            external_author: form.data.external_author,
             enacting_clause: form.data.enacting_clause,
-            proposed_effectivity: form.data.proposed_effectivity,
             explanatory_note: form.data.explanatory_note,
             committee_id: form.data.committee_id,
             reference_number: form.data.reference_number,
@@ -265,13 +265,13 @@ export function SubmitDocumentDialog({
                 ok = false;
             }
 
-            if (isMeasure && !form.data.enacting_clause.trim()) {
-                form.setError('enacting_clause', t('documents.enacting_clause_required'));
+            if (!form.data.external_author.trim()) {
+                form.setError('external_author', t('documents.author_required'));
                 ok = false;
             }
 
-            if (isMeasure && (form.data.proposed_effectivity === '' || form.data.proposed_effectivity < 1)) {
-                form.setError('proposed_effectivity', t('documents.proposed_effectivity_required'));
+            if (isMeasure && !form.data.enacting_clause.trim()) {
+                form.setError('enacting_clause', t('documents.enacting_clause_required'));
                 ok = false;
             }
 
@@ -310,7 +310,7 @@ export function SubmitDocumentDialog({
 
         form.transform((data) => ({
             ...data,
-            proposed_effectivity: isLegislativeMeasure(data.document_type) ? data.proposed_effectivity || null : null,
+            external_author: data.external_author.trim(),
         }));
 
         form.post('/documents', {
@@ -461,8 +461,8 @@ export function SubmitDocumentDialog({
                             }
                             committee={selectedCommittee?.name ?? null}
                             abstract={form.data.abstract}
+                            author={form.data.external_author}
                             enactingClause={form.data.enacting_clause}
-                            proposedEffectivity={form.data.proposed_effectivity}
                             explanatoryNote={form.data.explanatory_note}
                             isMeasure={isMeasure}
                             isOrdinance={isOrdinance}
@@ -648,8 +648,8 @@ function DetailsStep({
             document_type: string;
             confidentiality: string;
             abstract: string;
+            external_author: string;
             enacting_clause: string;
-            proposed_effectivity: number | '';
             explanatory_note: string;
             committee_id: string;
             reference_number: string;
@@ -681,6 +681,26 @@ function DetailsStep({
                     required
                     autoComplete="off"
                     placeholder={t('documents.title_placeholder')}
+                />
+            </Field>
+
+            <Field
+                id="external_author"
+                label={t('documents.author')}
+                hint={t('documents.author_hint')}
+                error={form.errors.external_author}
+                required
+            >
+                <Input
+                    {...fieldAria('external_author', {
+                        hint: t('documents.author_hint'),
+                        error: form.errors.external_author,
+                    })}
+                    value={form.data.external_author}
+                    onChange={(event) => form.setData('external_author', event.target.value)}
+                    required
+                    autoComplete="off"
+                    placeholder={t('documents.author_placeholder')}
                 />
             </Field>
 
@@ -725,38 +745,6 @@ function DetailsStep({
                             required
                             placeholder={t('documents.enacting_clause_placeholder')}
                         />
-                    </Field>
-                    <Field
-                        id="proposed_effectivity"
-                        label={t('documents.proposed_effectivity')}
-                        hint={t('documents.proposed_effectivity_hint')}
-                        error={form.errors.proposed_effectivity}
-                        required
-                    >
-                        <div className="flex items-center gap-2">
-                            <Input
-                                {...fieldAria('proposed_effectivity', {
-                                    hint: t('documents.proposed_effectivity_hint'),
-                                    error: form.errors.proposed_effectivity,
-                                })}
-                                type="number"
-                                min={1}
-                                max={365}
-                                step={1}
-                                inputMode="numeric"
-                                className="w-24"
-                                value={form.data.proposed_effectivity}
-                                onChange={(event) =>
-                                    form.setData(
-                                        'proposed_effectivity',
-                                        event.target.value === '' ? '' : Number.parseInt(event.target.value, 10),
-                                    )
-                                }
-                                required
-                                placeholder={t('documents.proposed_effectivity_placeholder')}
-                            />
-                            <span className="text-sm text-ink-muted">{t('documents.proposed_effectivity_unit')}</span>
-                        </div>
                     </Field>
                     {isOrdinance ? (
                         <Field
@@ -868,8 +856,8 @@ function ReviewStep({
     confidentialityLabel,
     committee,
     abstract,
+    author,
     enactingClause,
-    proposedEffectivity,
     explanatoryNote,
     isMeasure,
     isOrdinance,
@@ -881,8 +869,8 @@ function ReviewStep({
     confidentialityLabel: string;
     committee: string | null;
     abstract: string;
+    author: string;
     enactingClause: string;
-    proposedEffectivity: number | '';
     explanatoryNote: string;
     isMeasure: boolean;
     isOrdinance: boolean;
@@ -897,6 +885,7 @@ function ReviewStep({
                 <Definition label={t('documents.document_type')}>{typeLabel}</Definition>
                 <Definition label={t('documents.security_classification')}>{confidentialityLabel}</Definition>
                 <Definition label={t('documents.title_label')}>{title || t('documents.not_provided')}</Definition>
+                <Definition label={t('documents.author')}>{author || t('documents.not_provided')}</Definition>
                 <Definition label={t('documents.reference')} numeric>
                     {reference || t('documents.no_reference')}
                 </Definition>
@@ -906,11 +895,6 @@ function ReviewStep({
                     <>
                         <Definition label={t('documents.enacting_clause')}>
                             {enactingClause || t('documents.not_provided')}
-                        </Definition>
-                        <Definition label={t('documents.proposed_effectivity')}>
-                            {proposedEffectivity === ''
-                                ? t('documents.not_provided')
-                                : t('documents.proposed_effectivity_value', { days: proposedEffectivity })}
                         </Definition>
                     </>
                 ) : null}
@@ -932,9 +916,9 @@ function firstStepWithError(errors: Record<string, string>): Step {
 
     if (
         errors.title ||
+        errors.external_author ||
         errors.reference_number ||
         errors.enacting_clause ||
-        errors.proposed_effectivity ||
         errors.explanatory_note ||
         errors.committee_id ||
         errors.abstract

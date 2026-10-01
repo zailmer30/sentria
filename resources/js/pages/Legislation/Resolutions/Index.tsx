@@ -1,3 +1,4 @@
+import { LegislativeHistoryDrawer } from '@/components/legislation/LegislativeHistoryPreview';
 import { LegislationRegisterNav } from '@/components/legislation/LegislationRegisterNav';
 import { Button } from '@/components/ui/button';
 import { EmptyState } from '@/components/ui/empty-state';
@@ -295,13 +296,15 @@ export default function ResolutionsIndex({ resolutions, summary, filters, status
                                             <RegisterOpenLink href={`/resolutions/${resolution.id}`}>
                                                 {t('register.open')}
                                             </RegisterOpenLink>
-                                            {resolution.document ? (
-                                                <Button variant="ghost" size="sm" asChild>
-                                                    <Link href={`/documents/${resolution.document.slug}/history`}>
-                                                        {t('legislation.history_title')}
-                                                    </Link>
+                                            <LegislativeHistoryDrawer
+                                                href={`/resolutions/${resolution.id}/history`}
+                                                title={resolution.title}
+                                                number={resolution.resolution_number}
+                                            >
+                                                <Button type="button" variant="ghost" size="sm">
+                                                    {t('legislation.history_title')}
                                                 </Button>
-                                            ) : null}
+                                            </LegislativeHistoryDrawer>
                                         </RegisterCellActions>
                                     </RegisterRow>
                                 ))

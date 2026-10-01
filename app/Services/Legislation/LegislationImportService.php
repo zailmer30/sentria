@@ -173,16 +173,8 @@ class LegislationImportService
                 'status',
                 'purpose',
                 'enacted_on',
-                'approved_on',
-                'vetoed_on',
-                'veto_overridden_on',
                 'effectivity_date',
-                'publication_date',
-                'publication_medium',
                 'approving_authority',
-                'sp_submitted_on',
-                'sp_reviewed_on',
-                'sp_result',
             ],
             LegislationKind::Resolution => [
                 'resolution_number',
@@ -195,10 +187,6 @@ class LegislationImportService
                 'effectivity_date',
                 'transmitted_on',
                 'transmitted_to',
-                'lce_sp_required',
-                'sp_submitted_on',
-                'sp_reviewed_on',
-                'sp_result',
             ],
         };
     }
@@ -216,14 +204,6 @@ class LegislationImportService
                 '2019-03-12',
                 '',
                 '',
-                '',
-                '',
-                '',
-                '',
-                '',
-                '',
-                '',
-                '',
             ],
             LegislationKind::Resolution => [
                 '045',
@@ -233,10 +213,6 @@ class LegislationImportService
                 '',
                 '',
                 '2020-06-01',
-                '',
-                '',
-                '',
-                '',
                 '',
                 '',
                 '',
@@ -272,7 +248,6 @@ class LegislationImportService
 
         if ($kind === LegislationKind::Ordinance) {
             $record = Ordinance::query()->create($this->ordinanceAttributes($document->getKey(), $actor, $fields));
-            $this->applyDefaultEffectivity($record);
         } else {
             $record = Resolution::query()->create($this->resolutionAttributes($document->getKey(), $actor, $fields));
         }
@@ -308,15 +283,7 @@ class LegislationImportService
             'status' => $fields['status'],
             'enacted_on' => $fields['enacted_on'],
             'approving_authority' => $fields['approving_authority'],
-            'approved_on' => $fields['approved_on'],
-            'vetoed_on' => $fields['vetoed_on'],
-            'veto_overridden_on' => $fields['veto_overridden_on'],
             'effectivity_date' => $fields['effectivity_date'],
-            'publication_date' => $fields['publication_date'],
-            'publication_medium' => $fields['publication_medium'],
-            'sp_submitted_on' => $fields['sp_submitted_on'],
-            'sp_reviewed_on' => $fields['sp_reviewed_on'],
-            'sp_result' => $fields['sp_result'],
             'imported_at' => now(),
             'imported_by' => $actor->getKey(),
         ];
@@ -328,8 +295,6 @@ class LegislationImportService
      */
     private function resolutionAttributes(string $documentId, User $actor, array $fields): array
     {
-        $required = strtolower((string) ($fields['lce_sp_required'] ?? ''));
-
         return [
             'document_id' => $documentId,
             'resolution_number' => $fields['resolution_number'],
@@ -342,30 +307,9 @@ class LegislationImportService
             'effectivity_date' => $fields['effectivity_date'],
             'transmitted_on' => $fields['transmitted_on'],
             'transmitted_to' => $fields['transmitted_to'],
-            'lce_sp_required' => in_array($required, ['1', 'true', 'yes'], true),
-            'sp_submitted_on' => $fields['sp_submitted_on'],
-            'sp_reviewed_on' => $fields['sp_reviewed_on'],
-            'sp_result' => $fields['sp_result'],
             'imported_at' => now(),
             'imported_by' => $actor->getKey(),
         ];
-    }
-
-    private function applyDefaultEffectivity(Ordinance $ordinance): void
-    {
-        $ordinance->refresh();
-
-        if ($ordinance->effectivity_date !== null || $ordinance->publication_date === null) {
-            return;
-        }
-
-        $ordinance->loadMissing('document');
-
-        $ordinance->forceFill([
-            'effectivity_date' => $ordinance->publication_date->copy()->addDays(
-                Ordinance::daysUntilEffectivity($ordinance->document?->proposed_effectivity),
-            ),
-        ])->save();
     }
 
     private function sequenceFromKey(string $key): int

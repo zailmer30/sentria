@@ -2,7 +2,7 @@ import { Input } from '@/components/ui/input';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { cn } from '@/lib/utils';
 import * as SelectPrimitive from '@radix-ui/react-select';
-import { Check, ChevronDown, ChevronUp, Search } from 'lucide-react';
+import { Check, ChevronDown, ChevronUp, Search, X } from 'lucide-react';
 import * as React from 'react';
 
 /**
@@ -444,6 +444,269 @@ export function SearchableSelect({
                 </div>
             </PopoverContent>
         </Popover>
+    );
+}
+
+type SearchableMultiSelectProps = {
+    id?: string;
+    values: string[];
+    onValuesChange: (values: string[]) => void;
+    items: SearchableSelectItem[];
+    placeholder?: string;
+    searchPlaceholder?: string;
+    emptyLabel?: string;
+    disabled?: boolean;
+    className?: string;
+    removeLabel?: (label: string) => string;
+    'aria-invalid'?: boolean;
+    'aria-label'?: string;
+};
+
+/**
+ * A searchable combobox that keeps more than one value. Selected items sit on
+ * the field as chips; opening it puts a search field above the list.
+ */
+export function SearchableMultiSelect({
+    id,
+    values,
+    onValuesChange,
+    items,
+    placeholder,
+    searchPlaceholder,
+    emptyLabel,
+    disabled,
+    className,
+    removeLabel,
+    ...aria
+}: SearchableMultiSelectProps) {
+    const [open, setOpen] = React.useState(false);
+    const [query, setQuery] = React.useState('');
+    const [active, setActive] = React.useState(0);
+    const searchRef = React.useRef<HTMLInputElement>(null);
+    const selected = values
+        .map((value) => items.find((item) => item.value === value))
+        .filter((item): item is SearchableSelectItem => item !== undefined);
+
+    const filtered = React.useMemo(() => {
+        const needle = query.trim().toLowerCase();
+
+        if (!needle) {
+            return items;
+        }
+
+        return items.filter((item) => {
+            const haystack = `${item.label} ${item.keywords ?? ''}`.toLowerCase();
+
+            return haystack.includes(needle);
+        });
+    }, [items, query]);
+
+    const activeIndex = filtered.length === 0 ? 0 : Math.min(active, filtered.length - 1);
+
+    function close() {
+        setOpen(false);
+        setQuery('');
+        setActive(0);
+    }
+
+    function toggle(next: string) {
+        onValuesChange(values.includes(next) ? values.filter((value) => value !== next) : [...values, next]);
+        setQuery('');
+        setActive(0);
+        searchRef.current?.focus();
+    }
+
+    function remove(next: string) {
+        onValuesChange(values.filter((value) => value !== next));
+    }
+
+    function onOpenChange(next: boolean) {
+        setOpen(next);
+
+        if (!next) {
+            setQuery('');
+            setActive(0);
+        } else {
+            setActive(0);
+        }
+    }
+
+    function onSearchKeyDown(event: React.KeyboardEvent<HTMLInputElement>) {
+        if (event.key === 'ArrowDown') {
+            event.preventDefault();
+            setActive(Math.min(activeIndex + 1, Math.max(filtered.length - 1, 0)));
+
+            return;
+        }
+
+        if (event.key === 'ArrowUp') {
+            event.preventDefault();
+            setActive(Math.max(activeIndex - 1, 0));
+
+            return;
+        }
+
+        if (event.key === 'Enter') {
+            event.preventDefault();
+            const item = filtered[activeIndex];
+
+            if (item) {
+                toggle(item.value);
+            }
+
+            return;
+        }
+
+        if (event.key === 'Escape') {
+            event.preventDefault();
+            close();
+        }
+    }
+
+    const listId = id ? `${id}-listbox` : undefined;
+    const invalid = Boolean(aria['aria-invalid']);
+
+    return (
+        <div
+            className={cn(
+                'flex min-h-9 w-full flex-col rounded-[var(--radius-md)] border border-line-control bg-surface',
+                'transition-[border-color,background-color,box-shadow] duration-[var(--duration-fast)]',
+                'focus-within:border-accent focus-within:outline-2 focus-within:outline-offset-2 focus-within:outline-[var(--color-focus)]',
+                disabled && 'pointer-events-none opacity-45',
+                invalid && 'border-critical bg-critical-soft',
+                className,
+            )}
+        >
+            {selected.length > 0 ? (
+                <ul className="flex flex-wrap gap-1.5 border-b border-line px-2.5 py-2">
+                    {selected.map((item) => (
+                        <li key={item.value}>
+                            <span className="inline-flex max-w-full items-center gap-1 rounded-[var(--radius-xs)] border border-line bg-canvas-sunk py-0.5 pr-0.5 pl-1.5 text-xs font-medium text-ink">
+                                <span className="min-w-0 truncate">{item.label}</span>
+                                <button
+                                    type="button"
+                                    className="flex size-4 shrink-0 items-center justify-center rounded-[var(--radius-xs)] text-ink-faint hover:bg-surface hover:text-ink"
+                                    aria-label={removeLabel?.(item.label) ?? item.label}
+                                    onClick={() => remove(item.value)}
+                                >
+                                    <X aria-hidden="true" strokeWidth={2} className="size-3" />
+                                </button>
+                            </span>
+                        </li>
+                    ))}
+                </ul>
+            ) : null}
+            <Popover modal open={open} onOpenChange={onOpenChange}>
+                <PopoverTrigger asChild>
+                    <button
+                        type="button"
+                        id={id}
+                        role="combobox"
+                        aria-expanded={open}
+                        aria-controls={listId}
+                        aria-haspopup="listbox"
+                        disabled={disabled}
+                        className={cn(
+                            'flex h-9 w-full items-center gap-2 px-2.5 text-left text-sm text-ink',
+                            'hover:bg-canvas-sunk',
+                            'focus-visible:outline-none',
+                            selected.length === 0 && 'text-ink-subtle',
+                        )}
+                        {...aria}
+                    >
+                        <Search aria-hidden="true" strokeWidth={1.75} className="size-3.5 shrink-0 text-ink-faint" />
+                        <span className="min-w-0 flex-1 truncate">
+                            {selected.length === 0 ? placeholder : searchPlaceholder}
+                        </span>
+                        <ChevronDown aria-hidden="true" strokeWidth={1.75} className="size-4 shrink-0 text-ink-faint" />
+                    </button>
+                </PopoverTrigger>
+                <PopoverContent
+                    align="start"
+                    sideOffset={4}
+                    className="z-[60] w-[var(--radix-popover-trigger-width)] p-0"
+                    onOpenAutoFocus={(event) => {
+                        event.preventDefault();
+                        searchRef.current?.focus();
+                    }}
+                >
+                    <div className="relative border-b border-line p-2">
+                        <Search
+                            aria-hidden="true"
+                            strokeWidth={1.75}
+                            className="pointer-events-none absolute top-1/2 left-4 size-4 -translate-y-1/2 text-ink-faint"
+                        />
+                        <Input
+                            ref={searchRef}
+                            value={query}
+                            onChange={(event) => {
+                                setQuery(event.target.value);
+                                setActive(0);
+                            }}
+                            onKeyDown={onSearchKeyDown}
+                            placeholder={searchPlaceholder}
+                            autoComplete="off"
+                            aria-label={searchPlaceholder}
+                            aria-autocomplete="list"
+                            aria-controls={listId}
+                            aria-activedescendant={
+                                filtered[activeIndex] && listId ? `${listId}-${filtered[activeIndex].value}` : undefined
+                            }
+                            className="h-8 pl-8"
+                        />
+                    </div>
+                    <div
+                        id={listId}
+                        role="listbox"
+                        aria-multiselectable="true"
+                        aria-label={aria['aria-label'] ?? placeholder}
+                        className="max-h-60 overflow-y-auto p-1"
+                    >
+                        {filtered.length === 0 ? (
+                            <p className="px-2 py-3 text-center text-sm text-ink-subtle">{emptyLabel}</p>
+                        ) : (
+                            filtered.map((item, index) => {
+                                const isActive = index === activeIndex;
+                                const isSelected = values.includes(item.value);
+
+                                return (
+                                    <button
+                                        key={item.value}
+                                        type="button"
+                                        id={listId ? `${listId}-${item.value}` : undefined}
+                                        role="option"
+                                        aria-selected={isSelected}
+                                        onMouseEnter={() => setActive(index)}
+                                        onClick={() => toggle(item.value)}
+                                        className={cn(
+                                            'flex w-full cursor-default items-center gap-2 rounded-[var(--radius-xs)] py-1.5 pr-2 pl-2 text-left text-sm outline-none',
+                                            isActive ? 'bg-canvas-sunk text-ink' : 'text-ink-muted',
+                                            isSelected && 'font-medium text-ink',
+                                        )}
+                                    >
+                                        <span
+                                            aria-hidden="true"
+                                            className={cn(
+                                                'flex size-4 shrink-0 items-center justify-center rounded-[var(--radius-xs)] border',
+                                                isSelected
+                                                    ? 'border-accent bg-accent text-[var(--color-accent-on)]'
+                                                    : 'border-line-control bg-surface',
+                                            )}
+                                        >
+                                            {isSelected ? <Check strokeWidth={2.5} className="size-3" /> : null}
+                                        </span>
+                                        <span className="min-w-0 flex-1 truncate">{item.label}</span>
+                                        {item.keywords ? (
+                                            <span className="shrink-0 font-mono text-xs text-ink-faint">{item.keywords}</span>
+                                        ) : null}
+                                    </button>
+                                );
+                            })
+                        )}
+                    </div>
+                </PopoverContent>
+            </Popover>
+        </div>
     );
 }
 

@@ -12,6 +12,7 @@ use App\Services\Documents\DocumentAccessService;
 use App\Services\Workflow\GuardedStateTransition;
 use App\States\Document\AgendaInclusion;
 use App\States\Document\CommitteeReferral as CommitteeReferralState;
+use App\States\Document\CommitteeReview;
 use App\States\Document\ReadingDeliberation;
 use App\States\Session\InSession;
 use Illuminate\Auth\Access\AuthorizationException;
@@ -27,57 +28,40 @@ class FloorReferralService
         private readonly DocumentAccessService $access,
     ) {}
 
-    public function refer(LegislativeSession $session, AgendaItem $item, string $committeeId, User $actor): Document
-    {
+    /**
+     * @param  list<string>  $committeeIds
+     */
+    public function refer(
+        LegislativeSession $session,
+        AgendaItem $item,
+        array $committeeIds,
+        User $actor,
+        ?string $meetingOn = null,
+        ?string $remarks = null,
+    ): Document {
         if (! $actor->can('documents.refer')) {
             throw new AuthorizationException('Missing permission [documents.refer] for this transition.');
         }
 
-        if (! $session->status instanceof InSession) {
-            throw new InvalidArgumentException('Referral from the floor is only available while the sitting is in session.');
-        }
-
-        $current = $this->agenda->currentItem($session);
-
-        if ($current === null || $current->getKey() !== $item->getKey()) {
-            throw new InvalidArgumentException('Referral from the floor is only for the item currently on the floor.');
-        }
-
-        if ($item->reading_number !== 1) {
-            throw new InvalidArgumentException('Referral from the floor is only for first reading.');
-        }
-
         $document = $item->document;
 
-        if ($document === null) {
-            throw new InvalidArgumentException('This item has no measure to refer.');
-        }
-
-        if (! $this->access->userCanView($actor, $document)) {
+        if ($document instanceof Document && ! $this->access->userCanView($actor, $document)) {
             throw new AuthorizationException('This measure is not available to you.');
         }
 
-        $reading = (int) ($document->current_reading ?? 1);
-
-        if ($reading !== 1) {
-            throw new InvalidArgumentException('Referral from the floor is only for first reading.');
-        }
-
-        $status = $document->status;
-        $canOpenThenRefer = $status instanceof AgendaInclusion;
-        $canRefer = $status instanceof ReadingDeliberation;
-
-        if (! $canOpenThenRefer && ! $canRefer) {
+        if (! $this->allowsRefer($session, $item, $actor) || ! $document instanceof Document) {
             throw new InvalidArgumentException('This measure cannot be referred from first reading.');
         }
 
-        $referred = DB::transaction(function () use ($session, $item, $document, $committeeId, $actor, $canOpenThenRefer): Document {
+        $canOpenThenRefer = $document->status instanceof AgendaInclusion;
+
+        $referred = DB::transaction(function () use ($session, $item, $document, $committeeIds, $actor, $canOpenThenRefer, $meetingOn, $remarks): Document {
             if ($canOpenThenRefer) {
                 $this->transitions->transition($document, ReadingDeliberation::class, $actor);
                 $document = $document->fresh() ?? $document;
             }
 
-            $this->referrals->refer($document, $committeeId, $actor, $session, $item);
+            $this->referrals->refer($document, $committeeIds, $actor, $session, $item, $meetingOn, $remarks);
             $this->transitions->transition($document, CommitteeReferralState::class, $actor);
 
             return $document->fresh() ?? $document;
@@ -87,5 +71,60 @@ class FloorReferralService
         event(new AgendaItemChanged($session, $current, $this->agenda->nextPendingItem($session)));
 
         return $referred;
+    }
+
+    public function allowsRefer(LegislativeSession $session, AgendaItem $item, User $actor): bool
+    {
+        if (! $actor->can('documents.refer') || ! $session->status instanceof InSession) {
+            return false;
+        }
+
+        if ($item->session_id !== $session->getKey() || $item->reading_number !== 1) {
+            return false;
+        }
+
+        $document = $item->document;
+
+        if (! $document instanceof Document || (int) ($document->current_reading ?? 1) !== 1) {
+            return false;
+        }
+
+        if (! $this->access->userCanView($actor, $document)) {
+            return false;
+        }
+
+        return $document->status instanceof AgendaInclusion
+            || $document->status instanceof ReadingDeliberation;
+    }
+
+    public function allowsEdit(LegislativeSession $session, AgendaItem $item, User $actor): bool
+    {
+        if (! $actor->can('documents.refer') || ! $session->status instanceof InSession) {
+            return false;
+        }
+
+        if ($item->session_id !== $session->getKey()) {
+            return false;
+        }
+
+        $document = $item->document;
+
+        if (! $document instanceof Document) {
+            return false;
+        }
+
+        if (! $document->status instanceof CommitteeReferralState && ! $document->status instanceof CommitteeReview) {
+            return false;
+        }
+
+        if (! $this->access->userCanView($actor, $document)) {
+            return false;
+        }
+
+        $document->loadMissing('referrals');
+
+        return $document->referrals->contains(
+            fn ($referral): bool => in_array($referral->status, ['pending', 'in-review'], true),
+        );
     }
 }

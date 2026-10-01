@@ -43,10 +43,6 @@ type Resolution = {
     effectivity_date: string | null;
     transmitted_on?: string | null;
     transmitted_to?: string | null;
-    lce_sp_required?: boolean;
-    sp_submitted_on?: string | null;
-    sp_reviewed_on?: string | null;
-    sp_result?: string | null;
     updated_at?: string | null;
     document: LinkedDocument | null;
     signed_copy: SignedCopy | null;
@@ -64,6 +60,7 @@ type Props = {
     publication: PublicationSummary | null;
     history: HistoryEvent[];
     can: { update: boolean; createPublication: boolean };
+    signedCopyRequiresConfirmation?: boolean;
 };
 
 const cardClass = 'overflow-hidden rounded-md border border-line bg-surface shadow-sm';
@@ -71,7 +68,13 @@ const cardClass = 'overflow-hidden rounded-md border border-line bg-surface shad
 const heroButtonClass =
     'border-transparent bg-surface text-ink shadow-none hover:bg-canvas-sunk hover:text-ink';
 
-export default function ResolutionsShow({ resolution, publication, history = [], can }: Props) {
+export default function ResolutionsShow({
+    resolution,
+    publication,
+    history = [],
+    can,
+    signedCopyRequiresConfirmation = false,
+}: Props) {
     const { t } = useTranslations();
     const { formatDate } = useFormatters();
     const statusLabel = t(`legislation.status_${resolution.status}`);
@@ -228,6 +231,7 @@ export default function ResolutionsShow({ resolution, publication, history = [],
                             recordId={resolution.id}
                             signedCopy={resolution.signed_copy}
                             canManage={can.update}
+                            requiresUnpublishConfirmation={signedCopyRequiresConfirmation}
                             className={cardClass}
                         />
 
@@ -267,26 +271,6 @@ export default function ResolutionsShow({ resolution, publication, history = [],
                                     {resolution.transmitted_to ? (
                                         <CitationRow label={t('legislation.transmitted_to')}>
                                             {resolution.transmitted_to}
-                                        </CitationRow>
-                                    ) : null}
-                                    {resolution.lce_sp_required ? (
-                                        <CitationRow label={t('legislation.lce_sp_required')}>
-                                            {t('legislation.required')}
-                                        </CitationRow>
-                                    ) : null}
-                                    {resolution.sp_submitted_on ? (
-                                        <CitationRow label={t('legislation.sp_submitted_on')} numeric>
-                                            {formatDate(resolution.sp_submitted_on)}
-                                        </CitationRow>
-                                    ) : null}
-                                    {resolution.sp_reviewed_on ? (
-                                        <CitationRow label={t('legislation.sp_reviewed_on')} numeric>
-                                            {formatDate(resolution.sp_reviewed_on)}
-                                        </CitationRow>
-                                    ) : null}
-                                    {resolution.sp_result ? (
-                                        <CitationRow label={t('legislation.sp_result')}>
-                                            {t(`legislation.sp_result_${resolution.sp_result}`)}
                                         </CitationRow>
                                     ) : null}
                                 </dl>

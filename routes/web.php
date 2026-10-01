@@ -1,5 +1,6 @@
 <?php
 
+use App\Http\Controllers\Admin\BrandingController;
 use App\Http\Controllers\Admin\ChamberChannelController;
 use App\Http\Controllers\Admin\MonitoringController;
 use App\Http\Controllers\Admin\SettingsController;
@@ -19,6 +20,7 @@ use App\Http\Controllers\DocumentAnnotationController;
 use App\Http\Controllers\DocumentConsistencyController;
 use App\Http\Controllers\DocumentController;
 use App\Http\Controllers\DocumentGrantController;
+use App\Http\Controllers\DocumentReferralController;
 use App\Http\Controllers\DocumentRelatedController;
 use App\Http\Controllers\DocumentSummaryController;
 use App\Http\Controllers\DocumentTransitionController;
@@ -28,6 +30,7 @@ use App\Http\Controllers\HallDisplayController;
 use App\Http\Controllers\LegislationImportController;
 use App\Http\Controllers\LegislativeHistoryController;
 use App\Http\Controllers\LegislativeSignedCopyController;
+use App\Http\Controllers\MinutesConsiderationController;
 use App\Http\Controllers\MinutesController;
 use App\Http\Controllers\MotionController;
 use App\Http\Controllers\NotificationController;
@@ -40,10 +43,12 @@ use App\Http\Controllers\ResolutionController;
 use App\Http\Controllers\RoleController;
 use App\Http\Controllers\SessionAssistantController;
 use App\Http\Controllers\SessionCaptureController;
+use App\Http\Controllers\SessionChatController;
 use App\Http\Controllers\SessionController;
 use App\Http\Controllers\SessionFloorCacheController;
 use App\Http\Controllers\SessionFloorController;
 use App\Http\Controllers\SessionFloorReferralController;
+use App\Http\Controllers\SessionGuestController;
 use App\Http\Controllers\TranscriptController;
 use App\Http\Controllers\UserController;
 use App\Http\Controllers\VotingController;
@@ -85,6 +90,9 @@ Route::middleware(['auth'])->group(function (): void {
     Route::get('/audit', [AuditLogController::class, 'index'])->name('audit.index');
     Route::get('/admin/monitoring', MonitoringController::class)->name('admin.monitoring');
     Route::get('/settings', [SettingsController::class, 'index'])->name('settings.index');
+    Route::get('/settings/branding', [BrandingController::class, 'edit'])->name('settings.branding.edit');
+    Route::put('/settings/branding', [BrandingController::class, 'update'])->name('settings.branding.update');
+    Route::post('/settings/branding/reset', [BrandingController::class, 'reset'])->name('settings.branding.reset');
     Route::get('/settings/chamber-channels', [ChamberChannelController::class, 'edit'])->name('settings.chamber-channels.edit');
     Route::get('/settings/chamber-channels/levels', [ChamberChannelController::class, 'levels'])->name('settings.chamber-channels.levels');
     Route::post('/settings/chamber-channels/starter', [ChamberChannelController::class, 'downloadStarter'])
@@ -157,6 +165,8 @@ Route::middleware(['auth'])->group(function (): void {
 
     Route::post('documents/{document:slug}/transition', DocumentTransitionController::class)
         ->name('documents.transition');
+    Route::put('documents/{document:slug}/referral', [DocumentReferralController::class, 'update'])
+        ->name('documents.referral.update');
 
     Route::get('committees', [CommitteeController::class, 'index'])->name('committees.index');
     Route::get('committees/create', [CommitteeController::class, 'create'])->name('committees.create');
@@ -224,14 +234,22 @@ Route::middleware(['auth'])->group(function (): void {
     Route::post('sessions/{session}/resume', [SessionController::class, 'resume'])->name('sessions.resume');
     Route::post('sessions/{session}/adjourn', [SessionController::class, 'adjourn'])->name('sessions.adjourn');
     Route::post('sessions/{session}/recording', [SessionController::class, 'updateRecording'])->name('sessions.recording.update');
+    Route::post('sessions/{session}/voting-mode', [SessionController::class, 'updateVotingMode'])->name('sessions.voting-mode.update');
 
     Route::post('sessions/{session}/agenda', [AgendaItemController::class, 'store'])->name('sessions.agenda.store');
     Route::put('sessions/{session}/agenda/{agendaItem}', [AgendaItemController::class, 'update'])->name('sessions.agenda.update');
     Route::post('sessions/{session}/agenda/{agendaItem}/documents', [AgendaItemController::class, 'bindDocuments'])->name('sessions.agenda.documents.store');
+    Route::post('sessions/{session}/agenda/{agendaItem}/minutes', [MinutesConsiderationController::class, 'upload'])->name('sessions.agenda.minutes.store');
+    Route::post('sessions/{session}/agenda/{agendaItem}/minutes-corrections', [MinutesConsiderationController::class, 'storeCorrection'])->name('sessions.agenda.minutes-corrections.store');
+    Route::put('sessions/{session}/agenda/{agendaItem}/minutes-corrections/{correction}', [MinutesConsiderationController::class, 'updateCorrection'])->name('sessions.agenda.minutes-corrections.update');
+    Route::delete('sessions/{session}/agenda/{agendaItem}/minutes-corrections/{correction}', [MinutesConsiderationController::class, 'destroyCorrection'])->name('sessions.agenda.minutes-corrections.destroy');
+    Route::patch('sessions/{session}/agenda/{agendaItem}/minutes-corrections/{correction}/apply', [MinutesConsiderationController::class, 'applyCorrection'])->name('sessions.agenda.minutes-corrections.apply');
     Route::delete('sessions/{session}/agenda/{agendaItem}', [AgendaItemController::class, 'destroy'])->name('sessions.agenda.destroy');
     Route::post('sessions/{session}/agenda/reorder', [AgendaItemController::class, 'reorder'])->name('sessions.agenda.reorder');
     Route::post('sessions/{session}/agenda/advance', [AgendaItemController::class, 'advance'])->name('sessions.agenda.advance');
     Route::post('sessions/{session}/agenda/retreat', [AgendaItemController::class, 'retreat'])->name('sessions.agenda.retreat');
+    Route::post('sessions/{session}/agenda/{agendaItem}/committee-hour-motion', [AgendaItemController::class, 'recordCommitteeHourMotion'])->name('sessions.agenda.committee-hour-motion');
+    Route::post('sessions/{session}/agenda/begin-heading-votes', [AgendaItemController::class, 'beginHeadingVotes'])->name('sessions.agenda.begin-heading-votes');
     Route::post('sessions/{session}/agenda/{agendaItem}/second-reading', [AgendaItemController::class, 'calendarSecondReading'])->name('sessions.agenda.second-reading');
     Route::post('sessions/{session}/agenda/{agendaItem}/third-reading', [AgendaItemController::class, 'calendarThirdReading'])->name('sessions.agenda.third-reading');
     Route::post('sessions/{session}/agenda/{agendaItem}/postpone', [AgendaItemController::class, 'postpone'])->name('sessions.agenda.postpone');
@@ -239,19 +257,38 @@ Route::middleware(['auth'])->group(function (): void {
     Route::post('sessions/{session}/calendar/second-reading', [AgendaItemController::class, 'calendarSecondReadingDocument'])->name('sessions.calendar.second-reading');
     Route::post('sessions/{session}/calendar/third-reading', [AgendaItemController::class, 'calendarThirdReadingDocument'])->name('sessions.calendar.third-reading');
     Route::post('sessions/{session}/calendar/postpone', [AgendaItemController::class, 'postponeDocument'])->name('sessions.calendar.postpone');
+    Route::post('sessions/{session}/calendar/bulk', [AgendaItemController::class, 'bulkCalendarRoute'])->name('sessions.calendar.bulk');
 
     Route::get('sessions/{session}/attendance', [AttendanceController::class, 'index'])->name('sessions.attendance.index');
     Route::put('sessions/{session}/attendance', [AttendanceController::class, 'update'])->name('sessions.attendance.update');
+    Route::post('sessions/{session}/guests', [SessionGuestController::class, 'store'])->name('sessions.guests.store');
+    Route::put('sessions/{session}/guests/{sessionGuest}', [SessionGuestController::class, 'update'])->name('sessions.guests.update');
+    Route::delete('sessions/{session}/guests/{sessionGuest}', [SessionGuestController::class, 'destroy'])->name('sessions.guests.destroy');
     Route::get('sessions/{session}/documents', [SessionController::class, 'documents'])->name('sessions.documents.index');
 
     Route::get('sessions/{session}/floor/cache', SessionFloorCacheController::class)->name('sessions.floor.cache');
     Route::get('sessions/{session}/floor/member', [SessionFloorController::class, 'boardMember'])->name('sessions.floor.member');
     Route::get('sessions/{session}/floor/secretariat', [SessionFloorController::class, 'secretariat'])->name('sessions.floor.secretariat');
     Route::get('sessions/{session}/floor/minutes', [SessionFloorController::class, 'minutes'])->name('sessions.floor.minutes');
+    Route::get('sessions/{session}/floor/recording', [SessionFloorController::class, 'recording'])->name('sessions.floor.recording');
     Route::put('sessions/{session}/floor/minutes', [SessionFloorController::class, 'updateMinutes'])->name('sessions.floor.minutes.update');
     Route::get('sessions/{session}/floor/presiding', [SessionFloorController::class, 'presidingOfficer'])->name('sessions.floor.presiding');
     Route::get('sessions/{session}/floor/dashboard', [SessionFloorController::class, 'dashboard'])->name('sessions.floor.dashboard');
     Route::post('sessions/{session}/floor/refer', SessionFloorReferralController::class)->name('sessions.floor.refer');
+
+    Route::prefix('sessions/{session}/chat')->name('sessions.chat.')->group(function (): void {
+        Route::get('/', [SessionChatController::class, 'index'])->name('index');
+        Route::get('/directory', [SessionChatController::class, 'directory'])->name('directory');
+        Route::post('/direct', [SessionChatController::class, 'storeDirect'])->name('direct');
+        Route::post('/groups', [SessionChatController::class, 'storeGroup'])->name('groups');
+        Route::get('/{conversation}', [SessionChatController::class, 'show'])->name('show');
+        Route::post('/{conversation}/messages', [SessionChatController::class, 'storeMessage'])
+            ->middleware('throttle:60,1')
+            ->name('messages');
+        Route::post('/{conversation}/read', [SessionChatController::class, 'markRead'])->name('read');
+        Route::post('/{conversation}/participants', [SessionChatController::class, 'addParticipants'])->name('participants.store');
+        Route::delete('/{conversation}/participants/{user}', [SessionChatController::class, 'removeParticipant'])->name('participants.destroy');
+    });
 
     Route::get('sessions/{session}/assistant', [SessionAssistantController::class, 'show'])->name('sessions.assistant.show');
     Route::post('sessions/{session}/assistant/search', [SessionAssistantController::class, 'search'])->name('sessions.assistant.search');
@@ -271,6 +308,8 @@ Route::middleware(['auth'])->group(function (): void {
     Route::get('sessions/{session}/transcript/search', [TranscriptController::class, 'search'])->name('sessions.transcript.search');
     Route::patch('sessions/{session}/transcript/{transcript}/segments/{segmentIndex}', [TranscriptController::class, 'correct'])
         ->name('sessions.transcript.correct');
+    Route::get('sessions/{session}/transcript/{transcript}/segments/{segmentIndex}/edits', [TranscriptController::class, 'segmentEdits'])
+        ->name('sessions.transcript.segment-edits');
 
     Route::post('sessions/{session}/motions', [MotionController::class, 'store'])->name('sessions.motions.store');
     Route::post('sessions/{session}/motions/{motion}/second', [MotionController::class, 'second'])->name('sessions.motions.second');
@@ -288,11 +327,13 @@ Route::middleware(['auth'])->group(function (): void {
     Route::get('sessions/{session}/voting/results', [VotingController::class, 'results'])->name('sessions.voting.results');
 
     Route::post('sessions/{session}/hall/document', [HallDisplayController::class, 'showDocument'])->name('sessions.hall.document');
+    Route::post('sessions/{session}/hall/report', [HallDisplayController::class, 'showReport'])->name('sessions.hall.report');
     Route::post('sessions/{session}/hall/item', [HallDisplayController::class, 'showItem'])->name('sessions.hall.item');
     Route::post('sessions/{session}/hall/results', [HallDisplayController::class, 'showResults'])->name('sessions.hall.results');
     Route::post('sessions/{session}/hall/view', [HallDisplayController::class, 'updateView'])->name('sessions.hall.view');
 
     Route::resource('minutes', MinutesController::class)->except(['destroy']);
+    Route::get('minutes/{minute}/pdf', [MinutesController::class, 'pdf'])->name('minutes.pdf');
     Route::post('minutes/{minute}/generate-draft', [MinutesController::class, 'generateDraft'])->name('minutes.generate-draft');
     Route::post('minutes/{minute}/accept-draft', [MinutesController::class, 'acceptDraft'])->name('minutes.accept-draft');
     Route::post('minutes/{minute}/review', [MinutesController::class, 'review'])->name('minutes.review');
@@ -303,6 +344,8 @@ Route::middleware(['auth'])->group(function (): void {
 
     Route::get('ordinances/{ordinance}/history', [LegislativeHistoryController::class, 'forOrdinance'])
         ->name('ordinances.history');
+    Route::get('resolutions/{resolution}/history', [LegislativeHistoryController::class, 'forResolution'])
+        ->name('resolutions.history');
     Route::get('documents/{document:slug}/history', [LegislativeHistoryController::class, 'forDocument'])
         ->name('documents.history');
 

@@ -1,7 +1,7 @@
 import { AiContent } from '@/components/ai/AiContent';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { Dialog, DialogContent, DialogFooter } from '@/components/ui/dialog';
+import { Dialog, DialogContent } from '@/components/ui/dialog';
 import { EmptyState } from '@/components/ui/empty-state';
 import { FileDrop } from '@/components/ui/file-drop';
 import { Input, Textarea } from '@/components/ui/input';
@@ -9,6 +9,7 @@ import { Notice } from '@/components/ui/notice';
 import { Panel, PanelBody, PanelHead, PanelTitle } from '@/components/ui/panel';
 import { Progress } from '@/components/ui/progress';
 import { SimpleSelect } from '@/components/ui/select';
+import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import { UserAvatar } from '@/components/users/UserAvatar';
 import { useTranscriptEcho } from '@/hooks/useTranscriptEcho';
@@ -17,7 +18,8 @@ import type { TranscriptSegment } from '@/lib/echo';
 import { EMPTY_VALUE, useFormatters } from '@/lib/format';
 import { useTranslations } from '@/lib/i18n';
 import { isLowConfidence, useLowConfidenceThreshold } from '@/lib/transcriptConfidence';
-import { isSegmentAttributed, segmentSpeakerLabel } from '@/lib/transcriptSpeaker';
+import { diffWords } from '@/lib/transcriptDiff';
+import { isSegmentAttributed, segmentIsEdited, segmentSpeakerLabel } from '@/lib/transcriptSpeaker';
 import { cn } from '@/lib/utils';
 import { Link, router, useForm } from '@inertiajs/react';
 import { AudioLines, CloudUpload, Download, Maximize2, MessageSquare, Minimize2, Pencil, Search, Type } from 'lucide-react';
@@ -31,6 +33,26 @@ type AgendaItemOption = {
     title: string;
 };
 
+type SegmentCorrection = {
+    index: number;
+    start: number;
+    text: string;
+    original_text: string;
+    speaker: string | null;
+    original_speaker: string | null;
+    text_changed: boolean;
+    speaker_changed: boolean;
+};
+
+type SegmentEdit = {
+    id: string;
+    field: 'text' | 'speaker' | string;
+    old_value: string | null;
+    new_value: string | null;
+    user_name: string | null;
+    created_at: string | null;
+};
+
 type TranscriptData = {
     id: string;
     status: string;
@@ -39,6 +61,7 @@ type TranscriptData = {
     language: string;
     full_text: string | null;
     segments: TranscriptSegment[];
+    corrections?: SegmentCorrection[];
     average_confidence: number | null;
     duration_seconds: number | null;
     model: string | null;
@@ -217,7 +240,7 @@ export default function SessionTranscript({
     highlight_seconds,
 }: Props) {
     const { t } = useTranslations();
-    const { formatTime } = useFormatters();
+    const { formatTime, formatDateTime } = useFormatters();
     const initialSegments = transcript?.segments ?? [];
     const { segments, status: liveStatus, error: liveError } = useTranscriptEcho(
         session.id,
@@ -242,6 +265,9 @@ export default function SessionTranscript({
     const [editMode, setEditMode] = useState(false);
     const [followLive, setFollowLive] = useState(true);
     const [hideLowConfidence, setHideLowConfidence] = useState(false);
+    const [mainTab, setMainTab] = useState<'feed' | 'corrections'>('feed');
+    const [editHistory, setEditHistory] = useState<SegmentEdit[]>([]);
+    const [historyLoading, setHistoryLoading] = useState(false);
     const lowConfidenceThreshold = useLowConfidenceThreshold();
     const segmentRefs = useRef<Map<number, HTMLElement>>(new Map());
     const feedListRef = useRef<HTMLUListElement | null>(null);
@@ -308,6 +334,26 @@ export default function SessionTranscript({
     }, [annotated, hideLowConfidence, kindFilter, query, speakerFilter]);
 
     const feed = useMemo(() => [...visible].reverse(), [visible]);
+
+    const corrections = useMemo(
+        () =>
+            annotated
+                .filter((segment) => can.correct && segmentIsEdited(segment))
+                .map((segment) => ({
+                    index: segment.index,
+                    start: segment.start,
+                    text: segment.text,
+                    original_text: segment.original_text ?? segment.text,
+                    speaker: segment.speaker ?? null,
+                    original_speaker: segment.original_speaker ?? segment.speaker ?? null,
+                    text_changed: typeof segment.original_text === 'string' && segment.text !== segment.original_text,
+                    speaker_changed:
+                        (segment.speaker ?? null) !== (segment.original_speaker ?? segment.speaker ?? null) ||
+                        (segment.speaker_id ?? null) !== (segment.original_speaker_id ?? null) ||
+                        (segment.attributed ?? true) !== (segment.original_attributed ?? true),
+                })),
+        [annotated, can.correct],
+    );
 
     const floorShares = useMemo(() => {
         const counts = new Map<string, number>();
@@ -390,6 +436,26 @@ export default function SessionTranscript({
                   : '__gallery__',
         );
         setEditMode(true);
+        setEditHistory([]);
+
+        if (!transcript) {
+            return;
+        }
+
+        setHistoryLoading(true);
+
+        void fetch(`/sessions/${session.id}/transcript/${transcript.id}/segments/${segment.index}/edits`, {
+            headers: { Accept: 'application/json' },
+        })
+            .then(async (response) => {
+                if (!response.ok) {
+                    return;
+                }
+
+                const data = (await response.json()) as { edits: SegmentEdit[] };
+                setEditHistory(data.edits);
+            })
+            .finally(() => setHistoryLoading(false));
     }
 
     async function saveCorrection() {
@@ -399,7 +465,9 @@ export default function SessionTranscript({
 
         setSaving(true);
 
-        const body: { text: string; speaker_id?: string; gallery?: boolean } = { text: editText };
+        const body: { text: string; speaker_id?: string; gallery?: boolean } = {
+            text: editText,
+        };
 
         if (editSpeaker === '__gallery__') {
             body.gallery = true;
@@ -416,6 +484,36 @@ export default function SessionTranscript({
                     'X-CSRF-TOKEN': document.querySelector<HTMLMetaElement>('meta[name="csrf-token"]')?.content ?? '',
                 },
                 body: JSON.stringify(body),
+            });
+
+            if (response.ok) {
+                setEditingIndex(null);
+                router.reload({ only: ['transcript'] });
+            }
+        } finally {
+            setSaving(false);
+        }
+    }
+
+    const editingSegment = editingIndex === null ? null : (segments.find((segment) => segment.index === editingIndex) ?? null);
+
+    async function restoreOriginal() {
+        if (editingIndex === null || !transcript || editingSegment?.original_text === undefined) {
+            return;
+        }
+
+        setEditText(editingSegment.original_text);
+        setSaving(true);
+
+        try {
+            const response = await fetch(`/sessions/${session.id}/transcript/${transcript.id}/segments/${editingIndex}`, {
+                method: 'PATCH',
+                headers: {
+                    Accept: 'application/json',
+                    'Content-Type': 'application/json',
+                    'X-CSRF-TOKEN': document.querySelector<HTMLMetaElement>('meta[name="csrf-token"]')?.content ?? '',
+                },
+                body: JSON.stringify({ text: editingSegment.original_text }),
             });
 
             if (response.ok) {
@@ -552,22 +650,115 @@ export default function SessionTranscript({
                 <div className={cn('grid items-start gap-4', expanded ? 'grid-cols-1' : 'xl:grid-cols-[minmax(0,1fr)_22rem]')}>
                     <Panel as="section" aria-live="polite" className="relative">
                         <PanelHead className="gap-y-3">
-                            <div className="flex min-w-0 items-baseline gap-2">
-                                <PanelTitle>{t('transcripts.live_feed')}</PanelTitle>
-                                {transcriptStatus === 'failed' ? (
-                                    <span className="text-xs font-medium text-critical">{t('transcripts.failed')}</span>
-                                ) : transcriptStatus === 'processing' || transcriptStatus === 'pending' ? (
-                                    <span className="text-xs text-ink-faint">{t('transcripts.processing')}</span>
+                            <div className="flex min-w-0 flex-wrap items-center gap-3">
+                                <div className="flex min-w-0 items-baseline gap-2">
+                                    <PanelTitle>
+                                        {mainTab === 'corrections' ? t('transcripts.corrections') : t('transcripts.live_feed')}
+                                    </PanelTitle>
+                                    {transcriptStatus === 'failed' ? (
+                                        <span className="text-xs font-medium text-critical">{t('transcripts.failed')}</span>
+                                    ) : transcriptStatus === 'processing' || transcriptStatus === 'pending' ? (
+                                        <span className="text-xs text-ink-faint">{t('transcripts.processing')}</span>
+                                    ) : null}
+                                    <span className="text-xs text-ink-faint">
+                                        {mainTab === 'corrections'
+                                            ? t('transcripts.corrections_count', { count: corrections.length })
+                                            : t('transcripts.segments_count', {
+                                                  shown: visible.length,
+                                                  total: annotated.length,
+                                              })}
+                                    </span>
+                                </div>
+                                {can.correct ? (
+                                    <Tabs
+                                        value={mainTab}
+                                        onValueChange={(value) => setMainTab(value === 'corrections' ? 'corrections' : 'feed')}
+                                        className="gap-0"
+                                    >
+                                        <TabsList>
+                                            <TabsTrigger value="feed">{t('transcripts.tab_feed')}</TabsTrigger>
+                                            <TabsTrigger value="corrections">
+                                                {t('transcripts.corrections')}
+                                                <span className="font-mono text-2xs text-ink-faint">{corrections.length}</span>
+                                            </TabsTrigger>
+                                        </TabsList>
+                                    </Tabs>
                                 ) : null}
-                                <span className="text-xs text-ink-faint">
-                                    {t('transcripts.segments_count', {
-                                        shown: visible.length,
-                                        total: annotated.length,
-                                    })}
-                                </span>
                             </div>
                         </PanelHead>
 
+                        {mainTab === 'corrections' && can.correct ? (
+                            corrections.length === 0 ? (
+                                <PanelBody>
+                                    <EmptyState bare title={t('transcripts.corrections_empty')} />
+                                </PanelBody>
+                            ) : (
+                                <ul className="max-h-[min(40rem,calc(100dvh-18rem))] divide-y divide-line overflow-y-auto">
+                                    {corrections.map((row) => {
+                                        const live = annotated.find((segment) => segment.index === row.index);
+
+                                        return (
+                                            <li key={row.index} className="px-5 py-4">
+                                                <div className="flex items-start justify-between gap-3">
+                                                    <div className="min-w-0 flex-1">
+                                                        <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                                                            <p className="text-sm font-semibold text-ink">
+                                                                {live?.speakerName ??
+                                                                    row.speaker ??
+                                                                    t('transcripts.unattributed')}
+                                                            </p>
+                                                            <time
+                                                                dateTime={`PT${Math.floor(row.start)}S`}
+                                                                className="font-mono text-2xs text-ink-faint"
+                                                            >
+                                                                {segmentClock(
+                                                                    transcript?.started_at ?? null,
+                                                                    row.start,
+                                                                    formatTime,
+                                                                )}
+                                                            </time>
+                                                            {row.text_changed ? (
+                                                                <Badge className="border-info-line bg-info-soft text-info">
+                                                                    {t('transcripts.edit_field_text')}
+                                                                </Badge>
+                                                            ) : null}
+                                                            {row.speaker_changed ? (
+                                                                <Badge variant="secondary">
+                                                                    {t('transcripts.edit_field_speaker')}
+                                                                </Badge>
+                                                            ) : null}
+                                                        </div>
+                                                        {row.speaker_changed ? (
+                                                            <p className="mt-1 text-xs text-ink-muted">
+                                                                {row.original_speaker || t('transcripts.unattributed')}
+                                                                {' → '}
+                                                                {row.speaker || t('transcripts.unattributed')}
+                                                            </p>
+                                                        ) : null}
+                                                        {row.text_changed ? (
+                                                            <WordDiff original={row.original_text} current={row.text} />
+                                                        ) : (
+                                                            <p className="mt-1.5 text-sm leading-6 text-ink">{row.text}</p>
+                                                        )}
+                                                    </div>
+                                                    <Button
+                                                        type="button"
+                                                        variant="ghost"
+                                                        size="icon-sm"
+                                                        aria-label={t('transcripts.correct_segment')}
+                                                        onClick={() => live && openEditor(live)}
+                                                        disabled={!live}
+                                                    >
+                                                        <Pencil className="size-4" />
+                                                    </Button>
+                                                </div>
+                                            </li>
+                                        );
+                                    })}
+                                </ul>
+                            )
+                        ) : (
+                            <>
                         <div className="space-y-3 border-b border-line px-5 py-3">
                             <form onSubmit={runSearch} className="flex flex-col gap-2 sm:flex-row">
                                 <label className="min-w-0 flex-1">
@@ -691,6 +882,11 @@ export default function SessionTranscript({
                                                                 {t('transcripts.low_confidence')}
                                                             </Badge>
                                                         ) : null}
+                                                        {can.correct && segmentIsEdited(segment) ? (
+                                                            <Badge className="border-info-line bg-info-soft text-info">
+                                                                {t('transcripts.edited')}
+                                                            </Badge>
+                                                        ) : null}
                                                         {itemLabel ? (
                                                             <span className="text-2xs font-medium text-ink-faint">
                                                                 {itemLabel}
@@ -747,7 +943,10 @@ export default function SessionTranscript({
                                 })}
                             </ul>
                         )}
+                            </>
+                        )}
 
+                        {mainTab === 'feed' ? (
                         <FeedToolbar
                             expanded={expanded}
                             editMode={editMode}
@@ -759,6 +958,7 @@ export default function SessionTranscript({
                             onFollowLive={jumpToLatest}
                             t={t}
                         />
+                        ) : null}
                     </Panel>
 
                     {expanded ? null : (
@@ -884,9 +1084,50 @@ export default function SessionTranscript({
             </div>
 
             <Dialog open={editingIndex !== null} onOpenChange={(open) => !open && setEditingIndex(null)}>
-                <DialogContent title={t('transcripts.correct_segment')}>
+                <DialogContent
+                    title={t('transcripts.correct_segment')}
+                    size="lg"
+                    footer={
+                        <div className="flex shrink-0 flex-wrap items-center justify-between gap-2 border-t border-line px-4 py-3">
+                            {can.correct &&
+                            editingSegment &&
+                            typeof editingSegment.original_text === 'string' &&
+                            editText !== editingSegment.original_text ? (
+                                <Button type="button" variant="secondary" onClick={() => void restoreOriginal()} disabled={saving}>
+                                    {t('transcripts.restore_original')}
+                                </Button>
+                            ) : (
+                                <span />
+                            )}
+                            <div className="flex flex-wrap items-center justify-end gap-2">
+                                <Button type="button" variant="secondary" onClick={() => setEditingIndex(null)}>
+                                    {t('transcripts.cancel')}
+                                </Button>
+                                <Button type="button" variant="primary" onClick={() => void saveCorrection()} disabled={saving}>
+                                    {saving ? t('transcripts.saving') : t('transcripts.save_correction')}
+                                </Button>
+                            </div>
+                        </div>
+                    }
+                >
+                    {can.correct && editingSegment && typeof editingSegment.original_text === 'string' ? (
+                        <div className="space-y-3">
+                            <div>
+                                <p className="mb-1.5 text-xs text-ink-subtle">{t('transcripts.original_text')}</p>
+                                <p className="rounded-sm border border-line bg-canvas-sunk/50 px-3 py-2 text-sm leading-6 text-ink-muted">
+                                    {editingSegment.original_text}
+                                </p>
+                            </div>
+                            {editText !== editingSegment.original_text ? (
+                                <div>
+                                    <p className="mb-1.5 text-xs text-ink-subtle">{t('transcripts.word_diff')}</p>
+                                    <WordDiff original={editingSegment.original_text} current={editText} />
+                                </div>
+                            ) : null}
+                        </div>
+                    ) : null}
                     {can.correct ? (
-                        <label className="block text-sm">
+                        <label className="mt-4 block text-sm">
                             <span className="mb-1.5 block text-xs text-ink-subtle">{t('transcripts.assign_speaker')}</span>
                             <SimpleSelect
                                 value={editSpeaker}
@@ -904,18 +1145,72 @@ export default function SessionTranscript({
                             />
                         </label>
                     ) : null}
-                    <Textarea value={editText} onChange={(event) => setEditText(event.target.value)} rows={5} />
-                    <DialogFooter>
-                        <Button type="button" variant="secondary" onClick={() => setEditingIndex(null)}>
-                            {t('transcripts.cancel')}
-                        </Button>
-                        <Button type="button" variant="primary" onClick={saveCorrection} disabled={saving}>
-                            {saving ? t('transcripts.saving') : t('transcripts.save_correction')}
-                        </Button>
-                    </DialogFooter>
+                    <label className="mt-4 block">
+                        <span className="mb-1.5 block text-xs text-ink-subtle">{t('transcripts.current_text')}</span>
+                        <Textarea value={editText} onChange={(event) => setEditText(event.target.value)} rows={5} />
+                    </label>
+                    <div className="mt-4">
+                        <p className="mb-1.5 text-xs text-ink-subtle">{t('transcripts.edit_history')}</p>
+                        {historyLoading ? (
+                            <p className="text-xs text-ink-faint">{t('transcripts.saving')}</p>
+                        ) : editHistory.length === 0 ? (
+                            <p className="text-xs text-ink-faint">{t('transcripts.edit_history_empty')}</p>
+                        ) : (
+                            <ol className="space-y-2">
+                                {editHistory.map((edit) => (
+                                    <li key={edit.id} className="border-l-2 border-line pl-3 text-xs text-ink-muted">
+                                        <p className="font-medium text-ink">
+                                            {t(`transcripts.edit_field_${edit.field === 'speaker' ? 'speaker' : 'text'}`)}
+                                            {edit.user_name ? ` · ${edit.user_name}` : ''}
+                                        </p>
+                                        <p className="font-mono text-2xs text-ink-faint">
+                                            {formatDateTime(edit.created_at)}
+                                        </p>
+                                        <p className="mt-1">
+                                            {edit.old_value || EMPTY_VALUE} → {edit.new_value || EMPTY_VALUE}
+                                        </p>
+                                    </li>
+                                ))}
+                            </ol>
+                        )}
+                    </div>
                 </DialogContent>
             </Dialog>
         </SessionLayout>
+    );
+}
+
+function WordDiff({ original, current }: { original: string; current: string }) {
+    const tokens = diffWords(original, current);
+
+    return (
+        <p className="mt-1.5 text-sm leading-6 text-ink">
+            {tokens.map((token, index) => {
+                if (token.type === 'equal') {
+                    return <span key={`${token.type}-${index}`}>{token.value}</span>;
+                }
+
+                if (token.type === 'removed') {
+                    return (
+                        <del
+                            key={`${token.type}-${index}`}
+                            className="rounded-sm bg-critical-soft text-critical line-through decoration-critical"
+                        >
+                            {token.value}
+                        </del>
+                    );
+                }
+
+                return (
+                    <ins
+                        key={`${token.type}-${index}`}
+                        className="rounded-sm bg-success-soft text-success no-underline"
+                    >
+                        {token.value}
+                    </ins>
+                );
+            })}
+        </p>
     );
 }
 

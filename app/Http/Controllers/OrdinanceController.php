@@ -3,22 +3,30 @@
 namespace App\Http\Controllers;
 
 use App\Enums\DocumentType;
+use App\Enums\LegislationKind;
 use App\Http\Requests\Legislation\StoreOrdinanceRequest;
 use App\Http\Requests\Legislation\UpdateOrdinanceRequest;
 use App\Http\Resources\DocumentResource;
 use App\Http\Resources\PublicationResource;
 use App\Models\Document;
 use App\Models\Ordinance;
+use App\Models\Publication;
+use App\Services\Legislation\LegislationNumberAllocator;
 use App\Services\Legislation\LegislativeHistoryService;
+use App\States\Publication\Published;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 use Inertia\Inertia;
 use Inertia\Response;
 
 class OrdinanceController extends Controller
 {
-    public function __construct(private readonly LegislativeHistoryService $history) {}
+    public function __construct(
+        private readonly LegislativeHistoryService $history,
+        private readonly LegislationNumberAllocator $numbers,
+    ) {}
 
     public function index(Request $request): Response
     {
@@ -67,13 +75,23 @@ class OrdinanceController extends Controller
         return Inertia::render('Legislation/Ordinances/Form', [
             'ordinance' => null,
             'documents' => Document::linkableOfTypes(DocumentType::ordinanceMeasures()),
+            'nextNumber' => $this->numbers->preview(LegislationKind::Ordinance),
+            'seriesYear' => (int) now()->year,
         ]);
     }
 
     public function store(StoreOrdinanceRequest $request): RedirectResponse
     {
-        $ordinance = Ordinance::query()->create($request->validated());
-        $this->applyDefaultEffectivity($ordinance);
+        $validated = $request->validated();
+        $number = trim((string) ($validated['ordinance_number'] ?? ''));
+
+        $ordinance = DB::transaction(fn (): Ordinance => Ordinance::query()->create([
+            ...$validated,
+            'ordinance_number' => $number !== ''
+                ? $number
+                : $this->numbers->allocate(LegislationKind::Ordinance),
+            'series_year' => (int) now()->year,
+        ]));
 
         return redirect()
             ->route('ordinances.show', $ordinance)
@@ -84,7 +102,7 @@ class OrdinanceController extends Controller
     {
         $this->authorize('view', $ordinance);
         $ordinance->load([
-            'document.publications',
+            'document.publications.document',
             'document.currentVersion',
             'document.author',
             'document.committee',
@@ -108,6 +126,8 @@ class OrdinanceController extends Controller
                 'update' => request()->user()?->can('update', $ordinance) ?? false,
                 'createPublication' => request()->user()?->can('publications.review') ?? false,
             ],
+            'signedCopyRequiresConfirmation' => $ordinance->document?->publications
+                ->contains(fn (Publication $publication): bool => $publication->status instanceof Published) ?? false,
         ]);
     }
 
@@ -125,28 +145,10 @@ class OrdinanceController extends Controller
     public function update(UpdateOrdinanceRequest $request, Ordinance $ordinance): RedirectResponse
     {
         $ordinance->update($request->validated());
-        $this->applyDefaultEffectivity($ordinance);
 
         return redirect()
             ->route('ordinances.show', $ordinance)
             ->with('success', 'legislation.ordinance_updated');
-    }
-
-    private function applyDefaultEffectivity(Ordinance $ordinance): void
-    {
-        $ordinance->refresh();
-
-        if ($ordinance->effectivity_date !== null || $ordinance->publication_date === null) {
-            return;
-        }
-
-        $ordinance->loadMissing('document');
-
-        $ordinance->forceFill([
-            'effectivity_date' => $ordinance->publication_date->copy()->addDays(
-                Ordinance::daysUntilEffectivity($ordinance->document?->proposed_effectivity),
-            ),
-        ])->save();
     }
 
     /**
