@@ -314,7 +314,7 @@ Recharts through shadcn's `ChartContainer`, rendered only after mount so the SSR
 ### Signature components
 - **Register:** Dense table — sticky head, hairlines, no vertical rules, no zebra; hover tint only; primary cell in ink; numeric cells in mono; empty via `RegisterEmpty` + `EmptyState`.
 - **Figure / FigureRow:** Counted facts in ink mono, hairline-separated columns in one panel.
-- **QuorumMeter / VoteBoard:** Chamber-readable seat markers and tally columns; digits stay ink. On a floor surface the meter adds a radial arc and the board an optional proportional bar, both additions to the counted figures rather than replacements.
+- **QuorumCard / VoteBoard:** The quorum card shows the present count inside a closed ring filled toward the number required, the avatars of members counted present, and the quorum rule; the board shows tally columns with an optional proportional bar. Digits stay ink; the ring and bar are additions to the counted figures rather than replacements.
 - **Flash:** Inertia flash messages are dispatched as `sonner` toasts from `FlashRegion`; standing constraints stay as `Notice`.
 - **Confidentiality:** Dot (register), Mark (detail), Legend (index), optional 2px panel edge.
 - **Notice:** Standing domain constraints; `role="alert"` for danger/live, `role="status"` otherwise.

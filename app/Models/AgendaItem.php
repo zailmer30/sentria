@@ -120,6 +120,12 @@ class AgendaItem extends Model implements Auditable
         return $this->hasMany(Vote::class);
     }
 
+    /** @return HasMany<MinutesCorrection, $this> */
+    public function minutesCorrections(): HasMany
+    {
+        return $this->hasMany(MinutesCorrection::class)->orderBy('created_at');
+    }
+
     /**
      * Whether this voting round was opened as a silent (masked) ballot.
      * Identities stay on the record; the hall and member floors hide them.

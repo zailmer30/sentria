@@ -96,6 +96,7 @@ class CommitteeController extends Controller
                 'members' => $committee->memberships->map(fn (CommitteeMember $member): array => [
                     'id' => $member->getKey(),
                     'user' => $member->user?->display_name,
+                    'avatar_url' => $member->user?->avatarUrl(),
                     'position' => $member->position,
                     'is_active' => $member->is_active,
                     'appointed_on' => $member->appointed_on?->toDateString(),
@@ -114,7 +115,6 @@ class CommitteeController extends Controller
                 'createReport' => $canCreateReport,
                 'submitReportForReview' => $user->can('reports.submitForReview'),
                 'submitReport' => $user->can('reports.submit'),
-                'adoptReport' => $user->can('reports.adopt'),
             ],
             'appointableUsers' => $canManageMembers ? $this->appointableUsers($committee) : [],
             'referableDocuments' => $canCreateReferral ? $this->referableDocuments($committee, $user) : [],

@@ -9,6 +9,7 @@ use App\Models\CommitteeReport;
 use App\Models\Document;
 use App\Models\User;
 use App\Notifications\CommitteeMemberAppointed;
+use App\Notifications\CommitteeReportAwaitingFiling;
 use App\Notifications\CommitteeReportSubmitted;
 use App\Notifications\DocumentEnteredCommitteeReview;
 use App\Notifications\DocumentReferralReturned;
@@ -134,13 +135,16 @@ it('notifies secretariat when a committee report is submitted', function (): voi
         ->post(route('reports.submit-for-review', $report))
         ->assertRedirect(route('documents.show', $document));
 
-    $this->actingAs($chair)
+    Notification::assertSentTo($secretariat, CommitteeReportAwaitingFiling::class);
+    Notification::assertNotSentTo($chair, CommitteeReportAwaitingFiling::class);
+
+    $this->actingAs($secretariat)
         ->post(route('reports.submit', $report))
         ->assertRedirect(route('documents.show', $document));
 
-    Notification::assertSentTo($secretariat, CommitteeReportSubmitted::class);
     Notification::assertSentTo($author, CommitteeReportSubmitted::class);
-    Notification::assertNotSentTo($chair, CommitteeReportSubmitted::class);
+    Notification::assertSentTo($chair, CommitteeReportSubmitted::class);
+    Notification::assertNotSentTo($secretariat, CommitteeReportSubmitted::class);
 });
 
 it('notifies a user when appointed to a committee', function (): void {

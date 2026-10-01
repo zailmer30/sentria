@@ -29,9 +29,10 @@ export const DialogContent = React.forwardRef<
         headerExtra?: React.ReactNode;
         /** Pinned below the scrollable body, outside the padded content. */
         footer?: React.ReactNode;
+        titleClassName?: string;
         size?: 'default' | 'lg';
     }
->(({ className, bodyClassName, children, title, description, headerExtra, footer, size = 'default', ...props }, ref) => {
+>(({ className, bodyClassName, children, title, description, headerExtra, footer, titleClassName, size = 'default', ...props }, ref) => {
     const { t } = useTranslations();
     const large = size === 'lg';
 
@@ -57,7 +58,11 @@ export const DialogContent = React.forwardRef<
                 >
                     <div className="min-w-0">
                         <DialogPrimitive.Title
-                            className={cn('font-semibold text-ink', large ? 'text-lg tracking-tight' : 'text-sm')}
+                            className={cn(
+                                'font-semibold text-ink',
+                                large ? 'text-lg tracking-tight' : 'text-sm',
+                                titleClassName,
+                            )}
                         >
                             {title}
                         </DialogPrimitive.Title>

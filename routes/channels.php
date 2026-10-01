@@ -1,6 +1,7 @@
 <?php
 
 use App\Models\LegislativeSession;
+use App\Models\SessionConversation;
 use App\Models\User;
 use Illuminate\Support\Facades\Broadcast;
 
@@ -22,4 +23,14 @@ Broadcast::channel('session-transcript.{sessionId}', function (User $user, strin
     return $session !== null
         && $user->can('view', $session)
         && $user->can('transcripts.view');
+});
+
+Broadcast::channel('session-chat.{conversationId}', function (User $user, string $conversationId): bool {
+    $conversation = SessionConversation::query()->with('session')->find($conversationId);
+
+    if ($conversation === null) {
+        return false;
+    }
+
+    return $user->can('view', $conversation);
 });

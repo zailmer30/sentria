@@ -1,23 +1,35 @@
 <?php
 
+use App\Contracts\Malware\MalwareScanner;
+use App\DTO\Malware\ScanResult;
 use App\Enums\DocumentType;
 use App\Enums\UserRole;
+use App\Jobs\Documents\ProcessDocumentVersionJob;
 use App\Models\AuditLog;
 use App\Models\Document;
+use App\Models\DocumentEmbedding;
 use App\Models\DocumentVersion;
 use App\Models\Ordinance;
 use App\Models\Publication;
 use App\Models\Resolution;
 use App\Models\User;
+use App\Notifications\PublicationReturnedForSignedCopy;
 use App\Services\Documents\DocumentSearchIndexer;
 use App\Services\Documents\DocumentTextStore;
+use App\Services\Documents\DocumentVersionService;
 use App\Services\Portal\PublicPortalSearchService;
+use App\Services\Workflow\GuardedStateTransition;
 use App\States\Publication\InternalDocument;
+use App\States\Publication\MarkPublic;
+use App\States\Publication\PublicationReview;
 use App\States\Publication\Published;
+use App\States\Publication\SecretariatReview;
 use Database\Seeders\PermissionMatrixSeeder;
 use Database\Seeders\RolePermissionSeeder;
 use Illuminate\Http\UploadedFile;
 use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Facades\Notification;
+use Illuminate\Support\Facades\Queue;
 use Illuminate\Support\Facades\Storage;
 use Inertia\Testing\AssertableInertia as Assert;
 
@@ -49,6 +61,7 @@ function attachSignedCopy(
     Ordinance|Resolution $record,
     string $name = 'signed.pdf',
     string $contents = "%PDF-1.4\n%%EOF",
+    array $extra = [],
 ): Ordinance|Resolution {
     $route = $record instanceof Ordinance
         ? route('ordinances.signed-copy.store', $record)
@@ -59,7 +72,7 @@ function attachSignedCopy(
 
     test()->actingAs($actor)
         ->from($show)
-        ->post($route, ['file' => signedPdf($name, $contents)])
+        ->post($route, ['file' => signedPdf($name, $contents), ...$extra])
         ->assertRedirect($show);
 
     return $record->fresh();
@@ -72,9 +85,7 @@ it('uploads a pdf signed copy on a draft ordinance without creating a document v
         'document_id' => $document->getKey(),
         'status' => 'draft',
         'enacted_on' => null,
-        'approved_on' => null,
         'effectivity_date' => null,
-        'publication_date' => null,
     ]);
     $versionCount = $document->versions()->count();
 
@@ -242,9 +253,10 @@ it('serves the published signed copy and does not fall back to the document vers
         'status' => 'enacted',
     ]);
 
-    $publication = Publication::factory()->published()->create([
+    $publication = Publication::factory()->create([
         'document_id' => $document->getKey(),
-        'status' => Published::$name,
+        'status' => InternalDocument::$name,
+        'published_at' => null,
     ]);
 
     $this->get(route('portal.documents.signed-copy.download', $publication->public_slug))
@@ -259,6 +271,12 @@ it('serves the published signed copy and does not fall back to the document vers
         'wet-signed.pdf',
         "%PDF-1.4\nWET-SIGNED-COPY\n%%EOF",
     );
+
+    $publication->forceFill([
+        'status' => Published::$name,
+        'published_at' => now(),
+        'unpublished_at' => null,
+    ])->save();
 
     $download = $this->get(route('portal.documents.signed-copy.download', $publication->public_slug));
     $download->assertOk()->assertHeader('Content-Type', 'application/pdf');
@@ -306,11 +324,12 @@ it('keeps portal search on the published document index after a signed copy is a
         'status' => 'enacted',
     ]);
 
-    Publication::factory()->published()->create([
+    $publication = Publication::factory()->create([
         'document_id' => $document->getKey(),
         'title' => 'Generic Provincial Measure',
         'summary' => 'Published summary without the rare token.',
-        'status' => Published::$name,
+        'status' => InternalDocument::$name,
+        'published_at' => null,
     ]);
 
     $versionCount = $document->versions()->count();
@@ -320,6 +339,12 @@ it('keeps portal search on the published document index after a signed copy is a
         'signed-search.pdf',
         "%PDF-1.4\nZXYQSIGNEDONLYTOKEN appears only in the wet-signed file.\n%%EOF",
     );
+
+    $publication->forceFill([
+        'status' => Published::$name,
+        'published_at' => now(),
+        'unpublished_at' => null,
+    ])->save();
 
     expect($document->fresh()->versions()->count())->toBe($versionCount);
 
@@ -335,4 +360,226 @@ it('keeps portal search on the published document index after a signed copy is a
     ]);
 
     expect(collect($signedOnly->items())->pluck('document_id'))->not->toContain($document->getKey());
+});
+
+it('returns a published ordinance to secretariat review when a signed copy is uploaded', function (): void {
+    Queue::fake([ProcessDocumentVersionJob::class]);
+    Notification::fake();
+
+    $secretariat = signedCopyActor(UserRole::Secretariat, 'rewind');
+    $reviewer = signedCopyActor(UserRole::Secretariat, 'reviewer');
+    $member = signedCopyActor(UserRole::BoardMember, 'not-reviewer');
+    $document = Document::factory()->ofType(DocumentType::Ordinance)->published()->create([
+        'status' => 'approved',
+    ]);
+    $version = DocumentVersion::factory()->create([
+        'document_id' => $document->getKey(),
+        'is_current' => true,
+        'version_number' => 1,
+    ]);
+    $document->update(['version_count' => 1]);
+    $embedding = DocumentEmbedding::factory()->create([
+        'document_id' => $document->getKey(),
+        'document_version_id' => $version->getKey(),
+        'is_public' => true,
+    ]);
+    $ordinance = Ordinance::factory()->create([
+        'document_id' => $document->getKey(),
+        'status' => 'enacted',
+    ]);
+    $reviewerId = User::factory()->create()->getKey();
+    $first = Publication::factory()->published()->create([
+        'document_id' => $document->getKey(),
+        'document_version_id' => $version->getKey(),
+        'reviewed_by' => $reviewerId,
+    ]);
+    $second = Publication::factory()->published()->create([
+        'document_id' => $document->getKey(),
+        'document_version_id' => $version->getKey(),
+        'reviewed_by' => $reviewerId,
+    ]);
+
+    $this->actingAs($secretariat)
+        ->get(route('ordinances.show', $ordinance))
+        ->assertOk()
+        ->assertInertia(fn (Assert $page) => $page
+            ->where('signedCopyRequiresConfirmation', true)
+        );
+
+    $this->actingAs($secretariat)
+        ->from(route('ordinances.show', $ordinance))
+        ->post(route('ordinances.signed-copy.store', $ordinance), [
+            'file' => signedPdf('wet.pdf', "%PDF-1.4\nwet\n%%EOF"),
+        ])
+        ->assertSessionHasErrors('confirm_unpublish');
+
+    expect($first->fresh()->status)->toBeInstanceOf(Published::class)
+        ->and($ordinance->fresh()->signedCopyIsAttached())->toBeFalse();
+
+    $ordinance = attachSignedCopy($secretariat, $ordinance, 'wet.pdf', "%PDF-1.4\nwet\n%%EOF", [
+        'confirm_unpublish' => true,
+    ]);
+
+    $current = $document->fresh()->currentVersion;
+    $first->refresh();
+    $second->refresh();
+    $document->refresh();
+
+    expect($current)->not->toBeNull()
+        ->and($current->version_number)->toBe(2)
+        ->and($current->change_summary)->toBe('Signed copy uploaded')
+        ->and($current->is_current)->toBeTrue()
+        ->and($ordinance->signed_copy_path)->toBe($current->file_path)
+        ->and($ordinance->signed_copy_filename)->toBe('wet.pdf')
+        ->and($document->is_public)->toBeFalse()
+        ->and($document->published_at)->toBeNull()
+        ->and($document->status->getValue())->toBe('approved')
+        ->and($ordinance->status)->toBe('enacted')
+        ->and($first->status)->toBeInstanceOf(SecretariatReview::class)
+        ->and($second->status)->toBeInstanceOf(SecretariatReview::class)
+        ->and($first->published_at)->toBeNull()
+        ->and($first->published_by)->toBeNull()
+        ->and($first->unpublished_at)->not->toBeNull()
+        ->and($first->reviewed_by)->toBe($reviewerId)
+        ->and($first->document_version_id)->toBe($current->getKey())
+        ->and($second->document_version_id)->toBe($current->getKey())
+        ->and($embedding->fresh()->is_public)->toBeFalse();
+
+    Queue::assertPushed(ProcessDocumentVersionJob::class, fn (ProcessDocumentVersionJob $job): bool => $job->documentVersionId === $current->getKey());
+
+    expect(AuditLog::query()->where('event', 'legislation.signed_copy.upload')->count())->toBe(1)
+        ->and(AuditLog::query()->where('event', 'publication.signed_copy_rewind')->count())->toBe(2);
+
+    Notification::assertSentTo($reviewer, PublicationReturnedForSignedCopy::class);
+    Notification::assertSentTo($secretariat, PublicationReturnedForSignedCopy::class);
+    Notification::assertNotSentTo($member, PublicationReturnedForSignedCopy::class);
+
+    $this->get(route('portal.documents.show', $first->public_slug))->assertNotFound();
+
+    $transitions = app(GuardedStateTransition::class);
+    $transitions->transition($first->fresh(), PublicationReview::class, $secretariat);
+    $transitions->transition($first->fresh(), MarkPublic::class, $secretariat);
+
+    expect($first->fresh()->unpublished_at)->toBeNull()
+        ->and($first->fresh()->published_at)->not->toBeNull()
+        ->and($document->fresh()->is_public)->toBeTrue();
+});
+
+it('replaces a published signed copy without deleting the previous document version', function (): void {
+    Queue::fake([ProcessDocumentVersionJob::class]);
+    Notification::fake();
+
+    $secretariat = signedCopyActor(UserRole::Secretariat, 'replace-published');
+    $document = Document::factory()->ofType(DocumentType::Resolution)->published()->create();
+    DocumentVersion::factory()->create([
+        'document_id' => $document->getKey(),
+        'is_current' => true,
+        'version_number' => 1,
+    ]);
+    $document->update(['version_count' => 1]);
+    $resolution = Resolution::factory()->create([
+        'document_id' => $document->getKey(),
+        'status' => 'adopted',
+    ]);
+    Publication::factory()->published()->create([
+        'document_id' => $document->getKey(),
+    ]);
+
+    $resolution = attachSignedCopy($secretariat, $resolution, 'first-signed.pdf', "%PDF-1.4\nfirst\n%%EOF", [
+        'confirm_unpublish' => true,
+    ]);
+    $firstPath = $resolution->signed_copy_path;
+    $firstVersionId = $document->fresh()->currentVersion?->getKey();
+
+    Publication::factory()->published()->create([
+        'document_id' => $document->getKey(),
+    ]);
+
+    $resolution = attachSignedCopy($secretariat, $resolution, 'second-signed.pdf', "%PDF-1.4\nsecond\n%%EOF", [
+        'confirm_unpublish' => true,
+    ]);
+
+    expect($resolution->signed_copy_filename)->toBe('second-signed.pdf')
+        ->and($document->fresh()->currentVersion?->change_summary)->toBe('Signed copy replaced')
+        ->and($document->fresh()->currentVersion?->version_number)->toBe(3)
+        ->and(DocumentVersion::query()->find($firstVersionId)?->file_path)->toBe($firstPath);
+
+    Storage::disk('local')->assertExists($firstPath);
+    Storage::disk('local')->assertExists($resolution->signed_copy_path);
+
+    $this->actingAs($secretariat)
+        ->delete(route('resolutions.signed-copy.destroy', $resolution))
+        ->assertRedirect();
+
+    $resolution->refresh();
+
+    expect($resolution->signedCopyIsAttached())->toBeFalse()
+        ->and($resolution->document?->publications()->where('status', Published::$name)->exists())->toBeFalse();
+
+    Storage::disk('local')->assertExists($resolution->document->versions()->where('version_number', 3)->first()?->file_path);
+});
+
+it('rejects a published signed copy that fails the security scan', function (): void {
+    $secretariat = signedCopyActor(UserRole::Secretariat, 'infected-signed');
+    $document = Document::factory()->ofType(DocumentType::Ordinance)->published()->create();
+    $ordinance = Ordinance::factory()->create([
+        'document_id' => $document->getKey(),
+        'status' => 'enacted',
+    ]);
+    $publication = Publication::factory()->published()->create([
+        'document_id' => $document->getKey(),
+    ]);
+
+    $this->app->instance(MalwareScanner::class, new class implements MalwareScanner
+    {
+        public function scan(string $absolutePath): ScanResult
+        {
+            return new ScanResult('infected', 'blocked', 'test');
+        }
+    });
+
+    $this->actingAs($secretariat)
+        ->from(route('ordinances.show', $ordinance))
+        ->post(route('ordinances.signed-copy.store', $ordinance), [
+            'file' => signedPdf('bad.pdf'),
+            'confirm_unpublish' => true,
+        ])
+        ->assertSessionHasErrors('file');
+
+    expect($ordinance->fresh()->signedCopyIsAttached())->toBeFalse()
+        ->and($document->fresh()->versions()->count())->toBe(0)
+        ->and($publication->fresh()->status)->toBeInstanceOf(Published::class)
+        ->and($document->fresh()->is_public)->toBeTrue();
+});
+
+it('does not rewind a publication when a new version is uploaded from the document', function (): void {
+    Queue::fake([ProcessDocumentVersionJob::class]);
+
+    $secretariat = signedCopyActor(UserRole::Secretariat, 'document-upload');
+    $document = Document::factory()->ofType(DocumentType::Ordinance)->published()->create();
+    DocumentVersion::factory()->create([
+        'document_id' => $document->getKey(),
+        'is_current' => true,
+        'version_number' => 1,
+    ]);
+    $document->update(['version_count' => 1]);
+    $ordinance = Ordinance::factory()->create([
+        'document_id' => $document->getKey(),
+        'status' => 'enacted',
+    ]);
+    $ordinance = attachSignedCopy($secretariat, $ordinance, 'kept.pdf');
+    $publication = Publication::factory()->published()->create([
+        'document_id' => $document->getKey(),
+    ]);
+    $signedPath = $ordinance->signed_copy_path;
+
+    app(DocumentVersionService::class)->uploadNewVersion(
+        $document->fresh(),
+        $secretariat,
+        signedPdf('desk.pdf', "%PDF-1.4\ndesk\n%%EOF"),
+        'Desk revision',
+    );
+
+    expect($ordinance->fresh()->signed_copy_path)->toBe($signedPath)
+        ->and($publication->fresh()->status)->toBeInstanceOf(Published::class);
 });

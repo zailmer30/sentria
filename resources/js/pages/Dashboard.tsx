@@ -552,7 +552,7 @@ function Hero({
                     <div className="mt-5 flex flex-wrap items-center gap-2.5">
                         <Link
                             href="/documents"
-                            className="inline-flex h-9 items-center rounded-full bg-floor-ink px-4 text-sm font-medium text-[rgb(11,32,64)] shadow-[var(--shadow-xs)] hover:bg-floor-ink/90"
+                            className="inline-flex h-9 items-center rounded-full bg-floor-ink px-4 text-sm font-medium text-desk-plate shadow-[var(--shadow-xs)] hover:bg-floor-ink/90"
                         >
                             {t('dashboard.open_documents')}
                         </Link>
@@ -609,7 +609,7 @@ function HeroRing({ label, value, max, caption }: HeroRingData) {
                         fill="none"
                         strokeWidth="5"
                         strokeLinecap="round"
-                        className="stroke-[#8ecae6]"
+                        className="stroke-desk-ring"
                         strokeDasharray={`${circumference * ratio} ${circumference}`}
                     />
                 </svg>

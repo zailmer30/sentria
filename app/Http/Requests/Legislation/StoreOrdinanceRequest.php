@@ -29,22 +29,13 @@ class StoreOrdinanceRequest extends FormRequest
                 )),
                 'unique:ordinances,document_id',
             ],
-            'ordinance_number' => ['required', 'string', 'max:60', 'unique:ordinances,ordinance_number'],
-            'series_year' => ['required', 'integer', 'min:1900', 'max:2100'],
+            'ordinance_number' => ['nullable', 'string', 'max:60', Rule::unique('ordinances', 'ordinance_number')],
             'title' => ['required', 'string', 'max:500'],
             'purpose' => ['nullable', 'string', 'max:5000'],
             'status' => ['required', 'string', Rule::in(['draft', 'pending', 'enacted', 'vetoed', 'repealed'])],
             'enacted_on' => ['nullable', 'date'],
             'approving_authority' => ['nullable', 'string', 'max:255'],
-            'approved_on' => ['nullable', 'date'],
-            'vetoed_on' => ['nullable', 'date'],
-            'veto_overridden_on' => ['nullable', 'date'],
             'effectivity_date' => ['nullable', 'date'],
-            'publication_date' => ['nullable', 'date'],
-            'publication_medium' => ['nullable', 'string', 'max:255'],
-            'sp_submitted_on' => ['nullable', 'date'],
-            'sp_reviewed_on' => ['nullable', 'date'],
-            'sp_result' => ['nullable', 'string', Rule::in(['consistent', 'invalid', 'presumed'])],
         ];
     }
 

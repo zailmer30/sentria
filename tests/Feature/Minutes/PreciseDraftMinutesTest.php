@@ -124,6 +124,7 @@ it('builds a timed proceedings draft from official records only', function (): v
         'user_id' => $absent->getKey(),
         'status' => AttendanceStatus::Absent->value,
         'checked_in_at' => null,
+        'remarks' => 'in hospital',
     ]);
 
     $seconder = User::factory()->create([
@@ -171,8 +172,9 @@ it('builds a timed proceedings draft from official records only', function (): v
         ->and($content)->toContain('- Adjournment: 12:30')
         ->and($content)->toContain('- Date: 2026-08-31')
         ->and($content)->toContain('Corazon Manalo — late, checked in 09:14')
-        ->and($content)->toContain('Danilo Salazar — absent')
+        ->and($content)->toContain('Danilo Salazar — absent (in hospital)')
         ->and($content)->not->toContain('Danilo Salazar — absent, checked in')
+        ->and($content)->not->toContain('absent ()')
         ->and($content)->toContain('## Proceedings')
         ->and($content)->toContain('- 09:04–09:10 4. Roll Call')
         ->and($content)->toContain('Quorum declared 09:06')

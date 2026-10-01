@@ -9,6 +9,7 @@ use App\Models\AgendaItem;
 use App\Models\LegislativeSession;
 use App\Models\Transcript;
 use App\Services\AI\TranscriptionError;
+use App\Services\Sessions\TranscriptService;
 use Illuminate\Bus\Queueable;
 use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Bus\Dispatchable;
@@ -30,7 +31,7 @@ class ProcessSessionTranscriptionJob implements ShouldQueue
         public string $transcriptId,
     ) {}
 
-    public function handle(TranscriptionService $transcription): void
+    public function handle(TranscriptionService $transcription, TranscriptService $transcripts): void
     {
         $transcript = Transcript::query()
             ->with(['session', 'agendaItem'])
@@ -68,11 +69,15 @@ class ProcessSessionTranscriptionJob implements ShouldQueue
                 ['source' => 'upload'],
             );
 
+            $segments = $transcripts->stampOriginalsOnMany($result->segments);
+            $broadcast = $transcripts->typedSegments($segments);
+            $transcripts->discardEdits($transcript);
+
             $transcript->update([
                 'status' => 'completed',
                 'processing_error' => null,
                 'full_text' => $result->fullText,
-                'segments' => $result->segments,
+                'segments' => $segments,
                 'average_confidence' => $result->averageConfidence,
                 'duration_seconds' => $result->durationSeconds,
                 'provider' => $result->provider ?? config('sentria.transcription.driver'),
@@ -82,11 +87,11 @@ class ProcessSessionTranscriptionJob implements ShouldQueue
 
             $transcript->refresh();
 
-            foreach ($result->segments as $segment) {
+            foreach ($broadcast as $segment) {
                 event(new TranscriptSegmentReceived($session, $transcript, $segment));
             }
 
-            event(new TranscriptUpdated($session, $transcript, $result->segments, 'completed'));
+            event(new TranscriptUpdated($session, $transcript, $broadcast, 'completed'));
         } catch (Throwable $exception) {
             $this->markFailed($transcript, $session, TranscriptionError::message($exception));
         }

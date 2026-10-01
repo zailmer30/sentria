@@ -1,3 +1,4 @@
+import { BrandMark } from '@/components/branding/BrandMark';
 import {
     Sidebar,
     SidebarContent,
@@ -61,12 +62,7 @@ export function AppSidebar() {
                             collapsed ? 'justify-center px-0' : 'px-0.5',
                         )}
                     >
-                        <span
-                            aria-hidden="true"
-                            className="flex size-10 shrink-0 items-center justify-center rounded-[var(--radius-md)] bg-accent font-mono text-base font-semibold text-[var(--color-accent-on)]"
-                        >
-                            S
-                        </span>
+                        <BrandMark />
                         <span className={cn('min-w-0', collapsed && 'hidden')}>
                             <span className="block truncate text-md font-semibold tracking-[-0.01em] text-ink">
                                 {t('app.name')}

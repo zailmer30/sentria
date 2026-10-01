@@ -1,6 +1,8 @@
 import { AiContent } from '@/components/ai/AiContent';
 import { ReferToCommitteeDialog } from '@/components/documents/ReferToCommitteeDialog';
+import { CommitteeReportBody } from '@/components/documents/CommitteeReportBody';
 import { DocumentPdfViewer } from '@/components/documents/DocumentPdfViewer';
+import { ViewReportDialog } from '@/components/documents/ViewReportDialog';
 import { VOTE_BAR } from '@/components/session/VoteBoard';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogFooter } from '@/components/ui/dialog';
@@ -10,31 +12,27 @@ import { SimpleSelect } from '@/components/ui/select';
 import { Notice } from '@/components/ui/notice';
 import { Field, fieldAria } from '@/components/ui/field';
 import { Checkbox, Input } from '@/components/ui/input';
-import { UserAvatar } from '@/components/users/UserAvatar';
 import type { TranscriptSegment } from '@/lib/echo';
+import { useFormatters } from '@/lib/format';
 import { sessionDisplayTitle, withHonorific } from '@/lib/sessionFloor';
 import { isLowConfidence, useLowConfidenceThreshold } from '@/lib/transcriptConfidence';
 import { isSegmentAttributed, segmentSpeakerLabel } from '@/lib/transcriptSpeaker';
 import { cn } from '@/lib/utils';
 import { Link, router } from '@inertiajs/react';
-import { CircleStop, Clock3, Eye, EyeOff, FileText, Gavel, History, Mic, Scale, Users, Vote } from 'lucide-react';
+import { CircleStop, Clock3, Eye, EyeOff, FileText, Gavel, History, Mic, Pencil, Scale, ScrollText, Users, Vote } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import {
     floorControlModel,
     formatAgendaNumber,
     formatClockCountdown,
     formatClockElapsed,
-    formatTimeOfDay,
     isTimedRecess,
     isUnreferredFirstReading,
-    motionStatusLabel,
-    motionTone,
-    RuleMotionDialog,
+    referredCommitteeNames,
     useRecessRemaining,
     type AgendaItem,
     type FloorControl,
     type FloorProps,
-    type Motion,
     type ReadingPackItem,
     type Translate,
     type VotingState,
@@ -45,9 +43,9 @@ import {
  * secretariat's desk. Unlike the chamber dashboard, which is read across a
  * room, these are operated at arm's length: the sitting's identity and its
  * three counted facts sit on one plate at the top, the actions that change
- * the record run down the left, and the room's live state (what is being
- * said, who is here, what is next) runs down the right where it can be
- * watched without being acted on.
+ * the record run down the left — session controls sit high on that column,
+ * before the docket and hall PDF — and the order of business runs down the
+ * right where it can be watched without being acted on.
  */
 
 /* -------------------------------------------------------------------------- */
@@ -204,17 +202,24 @@ export function ConsoleAgendaCard({
     t: Translate;
 }) {
     const document = packItem?.document ?? null;
+    const report = packItem?.committee_report ?? item?.committee_report ?? null;
     const canPreview = Boolean(document?.can_preview && document.preview_url);
     const canRefer = packItem?.can_refer === true && document !== null;
+    const canEditReferral = packItem?.can_edit_referral === true && document !== null;
+    const referredNames = referredCommitteeNames(document);
+    const { formatList } = useFormatters();
     const firstReadingReferred =
         packItem?.reading_number === 1 &&
-        Boolean(document?.committee) &&
+        referredNames.length > 0 &&
         ['committee-referral', 'committee-review', 'committee-report'].includes(document?.status ?? '');
     const [referOpen, setReferOpen] = useState(false);
-    const projecting =
-        hallDisplay?.stage === 'document' &&
-        hallDisplay.agenda_item_id !== null &&
+    const [reportOpen, setReportOpen] = useState(false);
+    const projectingThisItem =
+        hallDisplay?.agenda_item_id != null &&
         (hallDisplay.agenda_item_id === item?.id || hallDisplay.agenda_item_id === packItem?.id);
+    const projectingDocument = hallDisplay?.stage === 'document' && projectingThisItem;
+    const projectingReport = hallDisplay?.stage === 'report' && projectingThisItem;
+    const projecting = projectingDocument || projectingReport;
 
     function projectDocument() {
         if (!item || !canPreview) {
@@ -228,12 +233,24 @@ export function ConsoleAgendaCard({
         );
     }
 
-    function hideDocument() {
+    function projectReport() {
+        if (!item || !report) {
+            return;
+        }
+
+        router.post(
+            `/sessions/${sessionId}/hall/report`,
+            { agenda_item_id: item.id },
+            { preserveScroll: true },
+        );
+    }
+
+    function hideProjection() {
         router.post(`/sessions/${sessionId}/hall/item`, {}, { preserveScroll: true });
     }
 
     return (
-        <Panel as="section" live={voting.open} className="session-item-enter">
+        <Panel as="section" className="session-item-enter">
             <PanelBody className="py-4">
                 <div className="flex items-start justify-between gap-3">
                     <div className="flex min-w-0 items-start gap-4">
@@ -269,18 +286,38 @@ export function ConsoleAgendaCard({
                         ) : null}
                         {firstReadingReferred ? (
                             <StatusChip tone="review" size="sm">
-                                {t('sessions.floor.referred_to', { committee: document?.committee ?? '' })}
+                                {t('sessions.floor.referred_to', { committee: formatList(referredNames) })}
                             </StatusChip>
                         ) : null}
                     </div>
                 </div>
 
-                {(canControlHall && canPreview) || canRefer || actions ? (
+                {(canControlHall && canPreview) || canRefer || canEditReferral || report || actions ? (
                     <div className="mt-3 flex flex-wrap items-center gap-2">
                         {actions}
+                        {report ? (
+                            canControlHall ? (
+                                projectingReport ? (
+                                    <Button type="button" variant="secondary" size="sm" onClick={hideProjection}>
+                                        <EyeOff aria-hidden="true" strokeWidth={1.75} />
+                                        {t('sessions.hall.hide_report')}
+                                    </Button>
+                                ) : (
+                                    <Button type="button" variant="secondary" size="sm" onClick={projectReport}>
+                                        <ScrollText aria-hidden="true" strokeWidth={1.75} />
+                                        {t('documents.view_report')}
+                                    </Button>
+                                )
+                            ) : (
+                                <Button type="button" variant="secondary" size="sm" onClick={() => setReportOpen(true)}>
+                                    <ScrollText aria-hidden="true" strokeWidth={1.75} />
+                                    {t('documents.view_report')}
+                                </Button>
+                            )
+                        ) : null}
                         {canControlHall && canPreview ? (
-                            projecting ? (
-                                <Button type="button" variant="secondary" size="sm" onClick={hideDocument}>
+                            projectingDocument ? (
+                                <Button type="button" variant="secondary" size="sm" onClick={hideProjection}>
                                     <EyeOff aria-hidden="true" strokeWidth={1.75} />
                                     {t('sessions.hall.hide_document')}
                                 </Button>
@@ -297,7 +334,15 @@ export function ConsoleAgendaCard({
                                 {t('documents.refer_title')}
                             </Button>
                         ) : null}
-                        {canControlHall && canPreview ? (
+                        {canEditReferral && document ? (
+                            <Button type="button" variant="secondary" size="sm" onClick={() => setReferOpen(true)}>
+                                <Pencil aria-hidden="true" strokeWidth={1.75} />
+                                {t('documents.refer_edit')}
+                            </Button>
+                        ) : null}
+                        {canControlHall && report ? (
+                            <span className="text-xs text-ink-muted">{t('sessions.hall.view_report_hint')}</span>
+                        ) : canControlHall && canPreview ? (
                             <span className="text-xs text-ink-muted">{t('sessions.hall.view_document_hint')}</span>
                         ) : null}
                     </div>
@@ -306,15 +351,24 @@ export function ConsoleAgendaCard({
 
             {voting.open ? <TallyStrip tallies={voting.tallies} t={t} /> : null}
 
+            {report ? (
+                <ViewReportDialog report={report} open={reportOpen} onOpenChange={setReportOpen} />
+            ) : null}
+
             {document ? (
                 <ReferToCommitteeDialog
                     documentSlug={document.slug}
                     committeeId={document.committee_id ?? null}
+                    committeeIds={document.open_referral?.committee_ids}
+                    meetingOn={document.open_referral?.meeting_on}
+                    remarks={document.open_referral?.remarks}
                     committees={committees}
                     open={referOpen}
                     onOpenChange={setReferOpen}
                     action={`/sessions/${sessionId}/floor/refer`}
                     agendaItemId={item?.id ?? packItem?.id}
+                    mode={canEditReferral ? 'edit' : 'create'}
+                    idPrefix={`floor-refer-${item?.id ?? packItem?.id ?? 'item'}`}
                 />
             ) : null}
         </Panel>
@@ -387,6 +441,33 @@ export function ConsoleHallDocument({
                         onViewChange={publishView}
                         className="h-full min-h-0 rounded-none border-0"
                     />
+                </div>
+            </PanelBody>
+        </Panel>
+    );
+}
+
+export function ConsoleHallReport({ packItem, t }: { packItem: ReadingPackItem | null; t: Translate }) {
+    const report = packItem?.committee_report ?? null;
+
+    if (!report) {
+        return null;
+    }
+
+    return (
+        <Panel as="section" className="overflow-hidden">
+            <PanelHead className="px-4 py-3">
+                <div className="flex min-w-0 items-center gap-2">
+                    <ScrollText aria-hidden="true" strokeWidth={1.75} className="size-4 shrink-0 text-ink-faint" />
+                    <PanelTitle>{t('sessions.hall.console_report')}</PanelTitle>
+                </div>
+                <StatusChip tone="review" size="sm">
+                    {t('sessions.hall.on_screen')}
+                </StatusChip>
+            </PanelHead>
+            <PanelBody className="p-0">
+                <div className="h-[min(28rem,50vh)] min-h-[16rem] overflow-y-auto px-5 py-4">
+                    <CommitteeReportBody report={report} />
                 </div>
             </PanelBody>
         </Panel>
@@ -486,65 +567,6 @@ function ControlButton({
     );
 }
 
-export function ConsoleRecording({
-    session,
-    t,
-}: {
-    session: FloorProps['session'];
-    t: Translate;
-}) {
-    const [pending, setPending] = useState(false);
-    const recordingOn = Boolean(session.recording_enabled);
-    const captureMode = session.capture_mode ?? 'mixer_mix';
-
-    function postRecording(payload: { recording_enabled?: boolean; capture_mode?: string }) {
-        setPending(true);
-        router.post(`/sessions/${session.id}/recording`, payload, {
-            preserveScroll: true,
-            onFinish: () => setPending(false),
-        });
-    }
-
-    return (
-        <Panel as="section">
-            <PanelHead>
-                <PanelTitle>{t('chamber.recording')}</PanelTitle>
-            </PanelHead>
-            <PanelBody className="flex flex-col gap-3">
-                <SimpleSelect
-                    value={captureMode}
-                    onValueChange={(value) => {
-                        if (!value || value === captureMode) {
-                            return;
-                        }
-
-                        postRecording({ capture_mode: value });
-                    }}
-                    items={[
-                        { value: 'mixer_mix', label: t('chamber.feed.mixer_mix') },
-                        { value: 'per_seat', label: t('chamber.feed.per_seat') },
-                    ]}
-                    disabled={pending}
-                />
-                <div>
-                    <Button
-                        variant={recordingOn ? 'secondary' : 'primary'}
-                        disabled={pending}
-                        onClick={() => postRecording({ recording_enabled: !recordingOn })}
-                    >
-                        {recordingOn ? (
-                            <CircleStop aria-hidden="true" strokeWidth={1.75} />
-                        ) : (
-                            <Mic aria-hidden="true" strokeWidth={1.75} />
-                        )}
-                        {recordingOn ? t('chamber.disable_recording') : t('chamber.enable_recording')}
-                    </Button>
-                </div>
-            </PanelBody>
-        </Panel>
-    );
-}
-
 export function ConsoleControls({
     session,
     currentItem,
@@ -599,6 +621,7 @@ export function ConsoleControls({
         sessionStatus: session.status,
         currentItemId,
         previousItemId: previousItem?.id ?? null,
+        nextItem,
         can,
         voting,
         t,
@@ -621,7 +644,7 @@ export function ConsoleControls({
         advancingRef.current = true;
         setAdvancing(true);
         router.post(
-            `/sessions/${session.id}/agenda/advance`,
+            `/sessions/${session.id}/${advance.route}`,
             {},
             {
                 preserveScroll: true,
@@ -729,7 +752,8 @@ export function ConsoleControls({
     }
 
     return (
-        <Panel as="section">
+        <>
+        <Panel as="section" id="session-controls">
             <PanelHead className="flex-col items-start gap-1">
                 <PanelTitle>{t('sessions.session_controls')}</PanelTitle>
                 <p className="text-xs text-ink-muted">{auditHint ?? t('sessions.controls_audit_hint')}</p>
@@ -798,6 +822,22 @@ export function ConsoleControls({
                 </ControlRow>
 
                 <ControlRow label={t('sessions.controls_vote')}>
+                    {can.update_voting_mode ? (
+                        <label htmlFor="defer-heading-votes" className="inline-flex items-center gap-2 text-sm text-ink">
+                            <Checkbox
+                                id="defer-heading-votes"
+                                checked={Boolean(session.defer_heading_votes)}
+                                onChange={(event) => {
+                                    router.post(
+                                        `/sessions/${session.id}/voting-mode`,
+                                        { defer_heading_votes: event.target.checked },
+                                        { preserveScroll: true },
+                                    );
+                                }}
+                            />
+                            {t('sessions.discuss_heading_then_vote')}
+                        </label>
+                    ) : null}
                     {showOpenVoting ? (
                         <>
                             <label htmlFor="silent-vote" className="inline-flex items-center gap-2 text-sm text-ink">
@@ -867,6 +907,7 @@ export function ConsoleControls({
                     )}
                 </Button>
             </PanelFoot>
+        </Panel>
 
             <Dialog open={confirmAdvanceOpen} onOpenChange={setConfirmAdvanceOpen}>
                 <DialogContent
@@ -921,127 +962,7 @@ export function ConsoleControls({
                     </DialogFooter>
                 </DialogContent>
             </Dialog>
-        </Panel>
-    );
-}
-
-/* -------------------------------------------------------------------------- */
-/* Recent motions                                                              */
-/* -------------------------------------------------------------------------- */
-
-export function ConsoleMotions({
-    motions,
-    sessionId,
-    allowRule = false,
-    t,
-}: {
-    motions: Motion[];
-    sessionId: string;
-    /** Ruling is the chair's alone. The clerk records the disposition, never sets it. */
-    allowRule?: boolean;
-    t: Translate;
-}) {
-    const [rulingMotionId, setRulingMotionId] = useState<string | null>(null);
-
-    function second(motionId: string) {
-        router.post(`/sessions/${sessionId}/motions/${motionId}/second`, {}, { preserveScroll: true });
-    }
-
-    function withdraw(motionId: string) {
-        if (!window.confirm(t('sessions.motion_withdraw_confirm'))) {
-            return;
-        }
-
-        router.post(`/sessions/${sessionId}/motions/${motionId}/withdraw`, {}, { preserveScroll: true });
-    }
-
-    return (
-        <Panel as="section">
-            <PanelHead>
-                <PanelTitle>{t('sessions.recent_motions')}</PanelTitle>
-                {motions.length > 0 ? (
-                    <span className="font-mono text-xs text-ink-muted">{motions.length}</span>
-                ) : null}
-            </PanelHead>
-
-            {motions.length === 0 ? (
-                <PanelBody>
-                    <p className="text-sm text-ink-muted">{t('sessions.no_motions')}</p>
-                </PanelBody>
-            ) : (
-                <ul>
-                    {motions.map((motion) => {
-                        const actions = motion.can ?? {};
-                        const showRule = Boolean(allowRule && actions.rule);
-
-                        return (
-                            <li
-                                key={motion.id}
-                                className="flex items-start gap-3 border-t border-line px-5 py-3 first:border-t-0"
-                            >
-                                <span className="w-10 shrink-0 pt-0.5 font-mono text-xs tabular-nums text-ink-faint">
-                                    {formatTimeOfDay(motion.moved_at)}
-                                </span>
-
-                                <div className="min-w-0 flex-1">
-                                    <p className="text-sm leading-5 font-medium text-ink">{motion.text}</p>
-                                    {motion.mover ? (
-                                        <p className="mt-0.5 text-xs text-ink-muted">
-                                            {t('sessions.moved_by', { name: motion.mover })}
-                                            {motion.seconder
-                                                ? ` · ${t('sessions.seconded_by')} ${motion.seconder}`
-                                                : ''}
-                                        </p>
-                                    ) : null}
-
-                                    {actions.second || actions.withdraw || showRule ? (
-                                        <div className="mt-2 flex flex-wrap gap-2">
-                                            {actions.second ? (
-                                                <Button size="sm" variant="secondary" onClick={() => second(motion.id)}>
-                                                    {t('sessions.motion_second')}
-                                                </Button>
-                                            ) : null}
-                                            {showRule ? (
-                                                <Button
-                                                    size="sm"
-                                                    variant="primary"
-                                                    onClick={() => setRulingMotionId(motion.id)}
-                                                >
-                                                    {t('sessions.motion_rule')}
-                                                </Button>
-                                            ) : null}
-                                            {actions.withdraw ? (
-                                                <Button size="sm" variant="ghost" onClick={() => withdraw(motion.id)}>
-                                                    {t('sessions.motion_withdraw')}
-                                                </Button>
-                                            ) : null}
-                                        </div>
-                                    ) : null}
-                                </div>
-
-                                <StatusChip tone={motionTone(motion.status)} size="sm">
-                                    {motionStatusLabel(motion.status, t)}
-                                </StatusChip>
-                            </li>
-                        );
-                    })}
-                </ul>
-            )}
-
-            {rulingMotionId ? (
-                <RuleMotionDialog
-                    sessionId={sessionId}
-                    motionId={rulingMotionId}
-                    open
-                    onOpenChange={(open) => {
-                        if (!open) {
-                            setRulingMotionId(null);
-                        }
-                    }}
-                    t={t}
-                />
-            ) : null}
-        </Panel>
+        </>
     );
 }
 
@@ -1292,69 +1213,5 @@ function InboxTurn({
                 </Button>
             </div>
         </li>
-    );
-}
-
-const ATTENDANCE_TONE: Record<string, string> = {
-    present: 'text-success',
-    late: 'text-warning',
-    absent: 'text-critical',
-    excused: 'text-ink-faint',
-    'on-official-business': 'text-ink-faint',
-};
-
-const ATTENDANCE_KEY: Record<string, string> = {
-    present: 'sessions.attendance_present',
-    late: 'sessions.attendance_late',
-    absent: 'sessions.attendance_absent',
-    excused: 'sessions.attendance_excused',
-    'on-official-business': 'sessions.attendance_official_business',
-};
-
-export function ConsoleAttendance({
-    attendance,
-    quorum,
-    t,
-}: {
-    attendance: FloorProps['attendance'];
-    quorum: FloorProps['quorum'];
-    t: Translate;
-}) {
-    return (
-        <Panel as="section">
-            <PanelHead className="px-4 py-3">
-                <PanelTitle>{t('sessions.attendance')}</PanelTitle>
-                <StatusChip tone={quorum.met ? 'final' : 'live'} size="sm">
-                    {quorum.met ? t('sessions.quorum_met') : t('sessions.quorum_not_met')}
-                </StatusChip>
-            </PanelHead>
-
-            <PanelBody className="px-4 py-2">
-                {attendance.length === 0 ? (
-                    <p className="py-2 text-sm text-ink-muted">{t('sessions.no_members_present')}</p>
-                ) : (
-                    <ul className="divide-y divide-line">
-                        {attendance.map((row) => (
-                            <li key={row.id} className="flex items-center gap-2.5 py-2">
-                                <UserAvatar
-                                    name={row.display_name}
-                                    src={row.avatar_url}
-                                    className="size-7 shrink-0"
-                                />
-                                <span className="min-w-0 flex-1 truncate text-sm text-ink">{row.display_name}</span>
-                                <span
-                                    className={cn(
-                                        'shrink-0 text-2xs font-semibold tracking-[0.06em] uppercase',
-                                        ATTENDANCE_TONE[row.status] ?? 'text-ink-faint',
-                                    )}
-                                >
-                                    {t(ATTENDANCE_KEY[row.status] ?? 'sessions.attendance_absent')}
-                                </span>
-                            </li>
-                        ))}
-                    </ul>
-                )}
-            </PanelBody>
-        </Panel>
     );
 }

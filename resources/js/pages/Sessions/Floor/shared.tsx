@@ -1,3 +1,4 @@
+import type { CommitteeReportDetail } from '@/components/documents/CommitteeReportBody';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogFooter } from '@/components/ui/dialog';
 import { Field, fieldAria } from '@/components/ui/field';
@@ -5,6 +6,8 @@ import { Textarea } from '@/components/ui/input';
 import { Panel, PanelBody, PanelHead, PanelTitle } from '@/components/ui/panel';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { StatusChip, type StatusTone } from '@/components/ui/status';
+import type { MinutesCorrectionRow } from '@/components/session/MinutesCorrectionsPanel';
+import type { QuorumSummary } from '@/components/session/QuorumCard';
 import { useOfflineVoteQueue } from '@/hooks/useOfflineVoteQueue';
 import { withHonorific } from '@/lib/sessionFloor';
 import { cn } from '@/lib/utils';
@@ -45,6 +48,7 @@ export type AgendaItem = {
     item_number: string | null;
     title: string;
     description: string | null;
+    category?: string | null;
     status: string;
     voting_open?: boolean;
     voting_round?: number;
@@ -53,6 +57,10 @@ export type AgendaItem = {
     placed_on_third_reading?: boolean;
     can_postpone?: boolean;
     can_undo?: boolean;
+    committee_hour_action?: 'second-reading' | 'archive' | null;
+    can_record_committee_hour_motion?: boolean;
+    committee_hour_recommendation?: string | null;
+    committee_report?: CommitteeReportDetail | null;
 };
 
 export type ReadingPackDocument = {
@@ -68,6 +76,16 @@ export type ReadingPackDocument = {
     abstract?: string | null;
     committee_id?: string | null;
     committee?: string | null;
+    open_referral?: {
+        id: string;
+        committee_id: string;
+        committee: string | null;
+        committee_ids?: string[];
+        committees?: string[];
+        status: string;
+        meeting_on?: string | null;
+        remarks?: string | null;
+    } | null;
     version_id: string | null;
     mime_type: string | null;
     can_preview: boolean;
@@ -88,8 +106,25 @@ export type CalendarDocketItem = {
     placed_on_third_reading?: boolean;
     can_postpone?: boolean;
     can_undo?: boolean;
+    can_refer?: boolean;
+    can_edit_referral?: boolean;
+    referral_agenda_item_id?: string | null;
     carried_to?: { id: string; session_number: string; title: string } | null;
-    document?: { title: string; slug?: string } | null;
+    document?: {
+        title: string;
+        slug?: string;
+        status?: string;
+        committee_id?: string | null;
+        committee?: string | null;
+        open_referral?: {
+            committee_id: string;
+            committee?: string | null;
+            committee_ids?: string[];
+            committees?: string[];
+            meeting_on?: string | null;
+            remarks?: string | null;
+        } | null;
+    } | null;
 };
 
 export type ReadingPackItem = {
@@ -106,14 +141,38 @@ export type ReadingPackItem = {
     reading_number?: number | null;
     title_only?: boolean;
     can_refer?: boolean;
+    can_edit_referral?: boolean;
     can_second_reading?: boolean;
     can_third_reading?: boolean;
     placed_on_third_reading?: boolean;
     can_postpone?: boolean;
     can_undo?: boolean;
     carried_to?: { id: string; session_number: string; title: string } | null;
+    committee_hour_action?: 'second-reading' | 'archive' | null;
+    can_record_committee_hour_motion?: boolean;
+    committee_hour_recommendation?: string | null;
+    committee_report?: CommitteeReportDetail | null;
     document: ReadingPackDocument | null;
 };
+
+export function referredCommitteeNames(
+    document?: {
+        committee?: string | null;
+        open_referral?: { committee?: string | null; committees?: string[] } | null;
+    } | null,
+): string[] {
+    const fromOpen = (document?.open_referral?.committees ?? []).filter(
+        (name): name is string => typeof name === 'string' && name.trim() !== '',
+    );
+
+    if (fromOpen.length > 0) {
+        return fromOpen;
+    }
+
+    const fallback = document?.open_referral?.committee ?? document?.committee ?? null;
+
+    return fallback && fallback.trim() !== '' ? [fallback] : [];
+}
 
 export type Motion = {
     id: string;
@@ -195,12 +254,15 @@ export type FloorProps = {
     session: {
         id: string;
         title: string;
+        type?: string | null;
+        type_label?: string | null;
         status: string;
         status_label: string;
         venue?: string | null;
         presiding_officer?: string | null;
         presiding_officer_id?: string | null;
         recording_enabled?: boolean;
+        defer_heading_votes?: boolean;
         capture_mode?: 'mixer_mix' | 'per_seat';
         secretariat_minutes?: string | null;
         recess_ends_at?: string | null;
@@ -209,12 +271,13 @@ export type FloorProps = {
     current_item: AgendaItem | null;
     next_item: AgendaItem | null;
     previous_item?: AgendaItem | null;
-    quorum: { present_count: number; required: number; met: boolean; seated_count: number };
+    quorum: QuorumSummary;
     document_link: { slug: string; title: string } | null;
     reading_pack?: ReadingPackItem[];
+    minutes_corrections?: MinutesCorrectionRow[];
     calendar_docket?: CalendarDocketItem[];
     hall_display?: {
-        stage: 'item' | 'document' | 'results';
+        stage: 'item' | 'document' | 'report' | 'results';
         agenda_item_id: string | null;
         view?: {
             zoom: number;
@@ -232,6 +295,7 @@ export type FloorProps = {
         position_title?: string | null;
         district?: string | null;
         status: string;
+        remarks?: string | null;
     }[];
     elapsed_seconds: number | null;
     voting: VotingState;
@@ -247,7 +311,7 @@ export type FloorProps = {
         processing_error?: string | null;
         segments: import('@/lib/echo').TranscriptSegment[];
     } | null;
-    workspace?: 'console' | 'minutes';
+    workspace?: 'console' | 'minutes' | 'recording';
 };
 
 /**
@@ -394,6 +458,7 @@ export function floorControlModel({
     sessionStatus,
     currentItemId,
     previousItemId = null,
+    nextItem = null,
     can,
     voting,
     t,
@@ -402,6 +467,7 @@ export function floorControlModel({
     sessionStatus: string;
     currentItemId: string | null;
     previousItemId?: string | null;
+    nextItem?: { category?: string | null } | null;
     can: Record<string, boolean>;
     voting: VotingState;
     t: (key: string) => string;
@@ -409,6 +475,9 @@ export function floorControlModel({
 }): FloorControlModel {
     const agendaLive =
         Boolean(can.manage_agenda) && (sessionStatus === 'in-session' || sessionStatus === 'suspended') && !voting.open;
+    const beginHeadingVotes = Boolean(can.begin_heading_votes) && agendaLive;
+    const openingCallToOrder =
+        !beginHeadingVotes && currentItemId === null && nextItem?.category === 'call-to-order';
 
     return {
         floor: [
@@ -449,11 +518,15 @@ export function floorControlModel({
             enabled: agendaLive && Boolean(previousItemId),
         },
         advance: {
-            key: 'advance',
-            route: 'agenda/advance',
-            label: t('sessions.action_next_item'),
+            key: beginHeadingVotes ? 'begin-heading-votes' : 'advance',
+            route: beginHeadingVotes ? 'agenda/begin-heading-votes' : 'agenda/advance',
+            label: beginHeadingVotes
+                ? t('sessions.action_begin_heading_votes')
+                : openingCallToOrder
+                  ? t('sessions.action_call_to_order')
+                  : t('sessions.action_next_item'),
             icon: SkipForward,
-            enabled: agendaLive && !advanceBlockedReason,
+            enabled: agendaLive && (beginHeadingVotes || !advanceBlockedReason),
         },
         adjournEnabled: Boolean(can.adjourn) && (sessionStatus === 'in-session' || sessionStatus === 'suspended'),
         showOpenVoting: Boolean(can.open_voting && currentItemId && !voting.open),

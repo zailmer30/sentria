@@ -1,11 +1,12 @@
 /* eslint-disable react/no-unknown-property -- Inertia Head meta tags use head-key for SSR deduplication */
+import { BrandMark } from '@/components/branding/BrandMark';
 import { Button } from '@/components/ui/button';
 import { PortalContainer } from '@/components/portal/PortalContainer';
 import { useTranslations } from '@/lib/i18n';
 import { cn } from '@/lib/utils';
 import type { PageProps } from '@/types';
 import { Head, Link, usePage } from '@inertiajs/react';
-import { Landmark, LogIn } from 'lucide-react';
+import { LogIn } from 'lucide-react';
 import type { ReactNode } from 'react';
 
 /**
@@ -57,9 +58,7 @@ export default function PortalLayout({ title, description, ogType = 'website', o
             >
                 <PortalContainer className="flex h-full items-center justify-between gap-6">
                     <Link href="/portal" className="flex min-w-0 items-center gap-3">
-                        <span className="flex size-10 shrink-0 items-center justify-center rounded-[var(--radius-md)] bg-plate text-accent-on shadow-plate">
-                            <Landmark aria-hidden="true" strokeWidth={1.75} className="size-5" />
-                        </span>
+                        <BrandMark fallbackClassName="bg-plate text-accent-on shadow-plate" />
                         <span className="min-w-0 leading-tight">
                             <span className="font-display block text-lg font-bold tracking-tight text-ink">
                                 {t('app.name')}

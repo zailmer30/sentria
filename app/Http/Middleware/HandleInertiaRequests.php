@@ -2,6 +2,7 @@
 
 namespace App\Http\Middleware;
 
+use App\Services\Branding\BrandingService;
 use Illuminate\Http\Request;
 use Inertia\Middleware;
 
@@ -23,6 +24,7 @@ class HandleInertiaRequests extends Middleware
     public function share(Request $request): array
     {
         $user = $request->user();
+        $branding = app(BrandingService::class)->snapshot();
 
         return [
             ...parent::share($request),
@@ -42,6 +44,7 @@ class HandleInertiaRequests extends Middleware
             'flash' => [
                 'success' => fn () => $request->session()->get('success'),
                 'error' => fn () => $request->session()->get('error'),
+                'error_replacements' => fn () => $request->session()->get('error_replacements'),
             ],
             'notifications' => [
                 'unread_count' => fn () => $user !== null && $user->can('notifications.viewAny')
@@ -50,11 +53,8 @@ class HandleInertiaRequests extends Middleware
             ],
             'locale' => app()->getLocale(),
             'translations' => fn () => $this->translations(app()->getLocale()),
-            'organization' => [
-                'name' => config('sentria.organization.name'),
-                'short_name' => config('sentria.organization.short_name'),
-                'locality' => config('sentria.organization.locality'),
-            ],
+            'organization' => $branding->organization(),
+            'branding' => $branding->branding(),
             'ai' => [
                 // AI always inherits the authenticated user's permissions.
                 // Surfaces must never elevate privileges for AI requests.

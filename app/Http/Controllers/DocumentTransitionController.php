@@ -67,9 +67,13 @@ class DocumentTransitionController extends Controller
         }
 
         if ($target === CommitteeReferralState::class) {
-            /** @var string $committeeId */
-            $committeeId = $request->validated('committee_id');
-            $this->referrals->refer($document, $committeeId, $actor);
+            $this->referrals->refer(
+                $document,
+                $request->committeeIds(),
+                $actor,
+                meetingOn: $request->meetingOn(),
+                remarks: $request->remarks(),
+            );
         }
 
         if ($target === AgendaInclusion::class) {
@@ -111,7 +115,9 @@ class DocumentTransitionController extends Controller
     {
         return match (true) {
             $document->status instanceof CommitteeReportState => 2,
-            $document->status instanceof FinalDocument => 3,
+            $document->status instanceof FinalDocument => $document->document_type->requiresThirdReading()
+                ? 3
+                : max(1, (int) ($document->current_reading ?? 2)),
             $document->status instanceof Registered => 1,
             default => max(1, (int) ($document->current_reading ?? 1)),
         };

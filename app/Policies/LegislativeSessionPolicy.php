@@ -112,6 +112,15 @@ class LegislativeSessionPolicy
     }
 
     /**
+     * Sitting switch between vote-after-each-item and discuss-the-heading-then-vote.
+     */
+    public function updateVotingMode(User $user, LegislativeSession $session): bool
+    {
+        return $user->can('view', $session)
+            && ($user->can('agenda.manage') || $user->can('voting.open'));
+    }
+
+    /**
      * Live minutes the clerk types during the sitting. Stored on the session
      * and folded into the system-generated draft after adjournment.
      */
@@ -123,5 +132,16 @@ class LegislativeSessionPolicy
 
         return ! ($session->status instanceof Finalized)
             && ! ($session->status instanceof Archived);
+    }
+
+    /**
+     * Ephemeral floor chat. Live only while the sitting is in session or recess.
+     */
+    public function useChat(User $user, LegislativeSession $session): bool
+    {
+        return $user->can('session-chat.use')
+            && $this->view($user, $session)
+            && $user->is_active
+            && $session->chatIsLive();
     }
 }

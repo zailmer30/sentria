@@ -9,6 +9,7 @@ use App\Http\Requests\Sessions\StartRecessRequest;
 use App\Http\Requests\Sessions\StoreSessionRequest;
 use App\Http\Requests\Sessions\UpdateSessionRecordingRequest;
 use App\Http\Requests\Sessions\UpdateSessionRequest;
+use App\Http\Requests\Sessions\UpdateSessionVotingModeRequest;
 use App\Http\Resources\SessionResource;
 use App\Jobs\Sessions\GenerateMinutesDraftJob;
 use App\Models\AgendaItem;
@@ -22,6 +23,7 @@ use App\Services\Sessions\CalendarRoutingService;
 use App\Services\Sessions\ChamberCaptureSettings;
 use App\Services\Sessions\ChamberChannelService;
 use App\Services\Sessions\ChamberRecordingService;
+use App\Services\Sessions\MinutesConsiderationService;
 use App\Services\Sessions\QuorumService;
 use App\Services\Sessions\SessionNumberAllocator;
 use App\Services\Workflow\GuardedStateTransition;
@@ -54,6 +56,7 @@ class SessionController extends Controller
         private readonly ChamberRecordingService $chamberRecording,
         private readonly ChamberCaptureSettings $chamberCapture,
         private readonly AuditLogger $audit,
+        private readonly MinutesConsiderationService $minutesConsideration,
     ) {}
 
     public function index(Request $request): Response
@@ -157,6 +160,12 @@ class SessionController extends Controller
         $canManageAgenda = $user?->can('create', AgendaItem::class) ?? false;
 
         $agendaDocuments = [];
+        $minutesConsideration = [
+            'previous_session' => null,
+            'sessions' => [],
+            'suggested_document_ids' => [],
+            'documents' => [],
+        ];
 
         if ($canManageAgenda) {
             $linkedIds = $session->agendaItems->pluck('document_id')->filter()->all();
@@ -184,12 +193,15 @@ class SessionController extends Controller
                 ])
                 ->values()
                 ->all();
+
+            $minutesConsideration = $this->minutesConsideration->bindPayload($session);
         }
 
         return Inertia::render('Sessions/Show', [
-            'session' => SessionResource::detail($session),
+            'session' => SessionResource::detail($session, $user instanceof User ? $user : null),
             'quorum' => $this->quorum->forSession($session)->toArray(),
             'agenda_documents' => $agendaDocuments,
+            'minutes_consideration' => $minutesConsideration,
             'calendar_docket' => $user instanceof User
                 ? $this->calendar->docket($session, $user)
                 : [],
@@ -203,7 +215,6 @@ class SessionController extends Controller
                 'adjourn' => $user?->can('adjourn', $session) ?? false,
                 'manage_agenda' => $canManageAgenda,
                 'view_transcript' => $user?->can('viewTranscript', $session) ?? false,
-                'manage_recording' => $user?->can('manageRecording', $session) ?? false,
             ],
         ]);
     }
@@ -243,6 +254,8 @@ class SessionController extends Controller
             $this->agenda->prepareStandardTemplate($session);
         }
 
+        $this->agenda->includeOpenReferrals($session, $this->requireUser($request));
+        $this->agenda->includeSubmittedCommitteeReports($session, $this->requireUser($request));
         $this->calendar->consumeCarryQueue($session);
 
         if ($session->status instanceof Draft) {
@@ -268,14 +281,8 @@ class SessionController extends Controller
             $updates['actual_start_at'] = now();
         }
 
-        if (! $session->agendaItems()->where('status', 'in-progress')->exists()) {
-            $first = $session->agendaItems()->where('status', 'pending')->orderBy('position')->first();
-
-            if ($first !== null) {
-                $first->update(['status' => 'in-progress', 'started_at' => now()]);
-            }
-        }
-
+        // Convened, not called to order. The first agenda row stays pending
+        // until the clerk opens it from the floor.
         if ($updates !== []) {
             $session->update($updates);
         }
@@ -375,6 +382,30 @@ class SessionController extends Controller
         unset($auditNew);
 
         return back()->with('success', $flash);
+    }
+
+    public function updateVotingMode(UpdateSessionVotingModeRequest $request, LegislativeSession $session): RedirectResponse
+    {
+        $deferred = $request->boolean('defer_heading_votes');
+        $previous = (bool) $session->defer_heading_votes;
+
+        $session->update(['defer_heading_votes' => $deferred]);
+        $session->refresh();
+
+        $this->audit->record(
+            event: $deferred ? 'session.heading_votes.deferred' : 'session.heading_votes.immediate',
+            category: 'session',
+            auditable: $session,
+            actor: $this->requireUser($request),
+            old: ['defer_heading_votes' => $previous],
+            new: ['defer_heading_votes' => $deferred],
+        );
+
+        event(new SessionStateChanged($session, $session->status->getValue(), $session->status->label()));
+
+        return back()->with('success', $deferred
+            ? 'sessions.heading_votes_deferred'
+            : 'sessions.heading_votes_immediate');
     }
 
     /**

@@ -178,6 +178,168 @@ it('refers a registered document to a committee and records the referral', funct
     ]);
 });
 
+it('refers a registered document to multiple committees with a meeting date and remarks', function (): void {
+    $secretariat = workflowActor(UserRole::Secretariat);
+    $primary = Committee::factory()->create(['name' => 'Committee on Rules']);
+    $secondary = Committee::factory()->create(['name' => 'Committee on Finance']);
+    $document = Document::factory()->ofType(DocumentType::Communication)->create([
+        'status' => Registered::$name,
+        'committee_id' => null,
+    ]);
+    $meetingOn = now()->addWeek()->toDateString();
+
+    $this->actingAs($secretariat)
+        ->post(route('documents.transition', $document), [
+            'to' => CommitteeReferral::$name,
+            'committee_ids' => [$primary->getKey(), $secondary->getKey()],
+            'meeting_on' => $meetingOn,
+            'remarks' => 'Joint referral for first hearing.',
+        ])
+        ->assertRedirect(route('documents.show', $document));
+
+    $fresh = $document->fresh();
+
+    expect($fresh->status)->toBeInstanceOf(CommitteeReferral::class)
+        ->and($fresh->committee_id)->toBe($primary->getKey());
+
+    $this->assertDatabaseHas('committee_referrals', [
+        'document_id' => $document->getKey(),
+        'committee_id' => $primary->getKey(),
+        'is_primary' => true,
+        'instructions' => 'Joint referral for first hearing.',
+        'meeting_on' => $meetingOn,
+        'status' => 'pending',
+        'referred_by' => $secretariat->getKey(),
+    ]);
+
+    $this->assertDatabaseHas('committee_referrals', [
+        'document_id' => $document->getKey(),
+        'committee_id' => $secondary->getKey(),
+        'is_primary' => false,
+        'instructions' => 'Joint referral for first hearing.',
+        'meeting_on' => $meetingOn,
+        'status' => 'pending',
+        'referred_by' => $secretariat->getKey(),
+    ]);
+});
+
+it('lets the secretariat edit an existing committee referral', function (): void {
+    $secretariat = workflowActor(UserRole::Secretariat);
+    $primary = Committee::factory()->create();
+    $added = Committee::factory()->create();
+    $document = Document::factory()->ofType(DocumentType::Communication)->create([
+        'status' => Registered::$name,
+        'committee_id' => null,
+    ]);
+
+    $this->actingAs($secretariat)
+        ->post(route('documents.transition', $document), [
+            'to' => CommitteeReferral::$name,
+            'committee_id' => $primary->getKey(),
+            'meeting_on' => now()->addDays(3)->toDateString(),
+            'remarks' => 'Original remarks.',
+        ])
+        ->assertRedirect(route('documents.show', $document));
+
+    $meetingOn = now()->addDays(14)->toDateString();
+
+    $this->actingAs($secretariat)
+        ->put(route('documents.referral.update', $document), [
+            'committee_ids' => [$added->getKey(), $primary->getKey()],
+            'meeting_on' => $meetingOn,
+            'remarks' => 'Updated hearing notes.',
+        ])
+        ->assertRedirect(route('documents.show', $document))
+        ->assertSessionHas('success', 'documents.referral_updated');
+
+    $fresh = $document->fresh();
+
+    expect($fresh->status)->toBeInstanceOf(CommitteeReferral::class)
+        ->and($fresh->committee_id)->toBe($added->getKey());
+
+    $this->assertDatabaseHas('committee_referrals', [
+        'document_id' => $document->getKey(),
+        'committee_id' => $added->getKey(),
+        'is_primary' => true,
+        'instructions' => 'Updated hearing notes.',
+        'meeting_on' => $meetingOn,
+        'status' => 'pending',
+    ]);
+
+    $this->assertDatabaseHas('committee_referrals', [
+        'document_id' => $document->getKey(),
+        'committee_id' => $primary->getKey(),
+        'is_primary' => false,
+        'instructions' => 'Updated hearing notes.',
+        'meeting_on' => $meetingOn,
+        'status' => 'pending',
+    ]);
+});
+
+it('closes a committee referral that is removed while editing', function (): void {
+    $secretariat = workflowActor(UserRole::Secretariat);
+    $kept = Committee::factory()->create();
+    $dropped = Committee::factory()->create();
+    $document = Document::factory()->ofType(DocumentType::Communication)->create([
+        'status' => Registered::$name,
+        'committee_id' => null,
+    ]);
+
+    $this->actingAs($secretariat)
+        ->post(route('documents.transition', $document), [
+            'to' => CommitteeReferral::$name,
+            'committee_ids' => [$kept->getKey(), $dropped->getKey()],
+        ])
+        ->assertRedirect(route('documents.show', $document));
+
+    $this->actingAs($secretariat)
+        ->put(route('documents.referral.update', $document), [
+            'committee_ids' => [$kept->getKey()],
+            'remarks' => 'Keep only the lead committee.',
+        ])
+        ->assertRedirect(route('documents.show', $document));
+
+    expect($document->fresh()->committee_id)->toBe($kept->getKey());
+
+    $this->assertDatabaseHas('committee_referrals', [
+        'document_id' => $document->getKey(),
+        'committee_id' => $kept->getKey(),
+        'is_primary' => true,
+        'status' => 'pending',
+        'instructions' => 'Keep only the lead committee.',
+    ]);
+
+    $this->assertDatabaseHas('committee_referrals', [
+        'document_id' => $document->getKey(),
+        'committee_id' => $dropped->getKey(),
+        'status' => 'closed',
+        'is_primary' => false,
+    ]);
+});
+
+it('forbids a board member from editing a committee referral', function (): void {
+    $secretariat = workflowActor(UserRole::Secretariat);
+    $member = workflowActor(UserRole::BoardMember);
+    $committee = Committee::factory()->create();
+    $document = Document::factory()->ofType(DocumentType::Communication)->create([
+        'status' => Registered::$name,
+        'committee_id' => null,
+    ]);
+
+    $this->actingAs($secretariat)
+        ->post(route('documents.transition', $document), [
+            'to' => CommitteeReferral::$name,
+            'committee_id' => $committee->getKey(),
+        ]);
+
+    $this->actingAs($member)
+        ->put(route('documents.referral.update', $document), [
+            'committee_ids' => [$committee->getKey()],
+            'remarks' => 'Should not save.',
+        ])
+        ->assertForbidden();
+});
+
 it('forbids a board member from advancing document workflow', function (): void {
     $member = workflowActor(UserRole::BoardMember);
     $document = Document::factory()->create(['status' => Submitted::$name]);

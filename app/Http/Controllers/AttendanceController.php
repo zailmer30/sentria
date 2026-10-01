@@ -3,10 +3,12 @@
 namespace App\Http\Controllers;
 
 use App\Enums\AttendanceStatus;
+use App\Enums\SessionGuestStatus;
 use App\Events\AttendanceUpdated;
 use App\Http\Requests\Sessions\UpdateAttendanceRequest;
 use App\Http\Resources\SessionResource;
 use App\Models\LegislativeSession;
+use App\Models\SessionGuest;
 use App\Models\User;
 use App\Services\Sessions\AttendanceService;
 use App\Services\Sessions\QuorumService;
@@ -38,6 +40,11 @@ class AttendanceController extends Controller
             'statuses' => collect(AttendanceStatus::cases())->map(fn ($s): array => [
                 'value' => $s->value,
                 'label' => $s->label(),
+            ])->values()->all(),
+            'guests' => $session->guests()->get()->map(fn (SessionGuest $guest): array => SessionResource::guest($guest))->values()->all(),
+            'guest_statuses' => collect(SessionGuestStatus::cases())->map(fn ($status): array => [
+                'value' => $status->value,
+                'label' => $status->label(),
             ])->values()->all(),
         ]);
     }

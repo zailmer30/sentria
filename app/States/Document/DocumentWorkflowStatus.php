@@ -11,9 +11,9 @@ use Spatie\ModelStates\StateConfig;
  * Configurable IRP document workflow. Transitions live only in this config —
  * never as scattered status string updates in controllers.
  *
- * Measure types (proposed ordinance/resolution) follow first reading, then
- * committee, then second and third reading. Other types keep the shorter
- * register → refer path.
+ * Measure types follow first reading, then committee, then second reading.
+ * Ordinances continue to third reading; resolutions are adopted or rejected
+ * on the second-reading vote. Other types keep the shorter register → refer path.
  *
  * @extends State<Document>
  */
@@ -44,9 +44,9 @@ abstract class DocumentWorkflowStatus extends State
             ->allowTransition(CommitteeReferral::class, AgendaInclusion::class)
             ->allowTransition(CommitteeReview::class, CommitteeReport::class)
             ->allowTransition(CommitteeReview::class, Registered::class)
-            ->allowTransition(CommitteeReview::class, Archive::class)
             ->allowTransition(CommitteeReview::class, AgendaInclusion::class)
             ->allowTransition(CommitteeReport::class, AgendaInclusion::class)
+            ->allowTransition(CommitteeReport::class, Archive::class)
             ->allowTransition(ReadingDeliberation::class, Amendments::class)
             ->allowTransition(ReadingDeliberation::class, Voting::class)
             ->allowTransition(ReadingDeliberation::class, Approved::class)
@@ -79,6 +79,7 @@ abstract class DocumentWorkflowStatus extends State
         $document = $this->getModel();
         $isMeasure = $document instanceof Document && $document->document_type->isMeasure();
         $reading = $document instanceof Document ? $document->current_reading : null;
+        $requiresThirdReading = $document instanceof Document && $document->document_type->requiresThirdReading();
 
         return match (static::class) {
             Submitted::class => [SecretariatReview::class, ReturnedForRevision::class],
@@ -90,12 +91,10 @@ abstract class DocumentWorkflowStatus extends State
             AgendaInclusion::class => [ReadingDeliberation::class],
             ReadingDeliberation::class => $this->readingDeliberationSuccessors($isMeasure, $reading),
             CommitteeReferral::class => [CommitteeReview::class],
-            CommitteeReview::class => $isMeasure
-                ? [CommitteeReport::class, Archive::class]
-                : [CommitteeReport::class],
-            CommitteeReport::class => [AgendaInclusion::class],
+            CommitteeReview::class => [CommitteeReport::class],
+            CommitteeReport::class => [AgendaInclusion::class, Archive::class],
             Amendments::class => [ReadingDeliberation::class, Voting::class],
-            Voting::class => $this->votingSuccessors($isMeasure, $reading),
+            Voting::class => $this->votingSuccessors($isMeasure, $reading, $requiresThirdReading),
             Approved::class => $isMeasure
                 ? [Transmittal::class]
                 : [FinalDocument::class],
@@ -129,16 +128,17 @@ abstract class DocumentWorkflowStatus extends State
     /**
      * @return list<class-string<DocumentWorkflowStatus>>
      */
-    private function votingSuccessors(bool $isMeasure, ?int $reading): array
+    private function votingSuccessors(bool $isMeasure, ?int $reading, bool $requiresThirdReading): array
     {
         if (! $isMeasure) {
             return [Approved::class, Rejected::class];
         }
 
-        return match ($reading) {
-            2 => [FinalDocument::class, ReadingDeliberation::class],
-            default => [Approved::class, Rejected::class],
-        };
+        if ($reading === 2 && $requiresThirdReading) {
+            return [FinalDocument::class, ReadingDeliberation::class];
+        }
+
+        return [Approved::class, Rejected::class];
     }
 
     /**
@@ -174,7 +174,7 @@ abstract class DocumentWorkflowStatus extends State
             return 'documents.refer';
         }
 
-        if ($stateClass === Archive::class && $fromClass === CommitteeReview::class) {
+        if ($stateClass === Archive::class && $fromClass === CommitteeReport::class) {
             return 'documents.archive';
         }
 
@@ -207,6 +207,36 @@ abstract class DocumentWorkflowStatus extends State
     }
 
     /**
+     * Hops the sitting takes once the filing is on an agenda. The document
+     * page must not offer them — calendar and floor update status from the
+     * result of that session.
+     *
+     * @param  class-string<DocumentWorkflowStatus>  $stateClass
+     * @param  class-string<DocumentWorkflowStatus>|null  $fromClass
+     */
+    public static function isSessionOwnedHop(string $stateClass, ?string $fromClass = null): bool
+    {
+        if ($stateClass === AgendaInclusion::class) {
+            // "Ready for first reading" stays a register action. Second and
+            // third reading inclusion happen from the calendar.
+            return $fromClass !== Registered::class;
+        }
+
+        if ($stateClass === CommitteeReferral::class) {
+            return $fromClass === ReadingDeliberation::class;
+        }
+
+        return in_array($stateClass, [
+            ReadingDeliberation::class,
+            Amendments::class,
+            Voting::class,
+            Approved::class,
+            Rejected::class,
+            FinalDocument::class,
+        ], true);
+    }
+
+    /**
      * Button copy for advancing into this state. The current status already
      * has {@see label()}; the action names the step that will be taken.
      *
@@ -218,15 +248,17 @@ abstract class DocumentWorkflowStatus extends State
         if ($stateClass === AgendaInclusion::class) {
             return match ($fromClass) {
                 CommitteeReferral::class, CommitteeReview::class, CommitteeReport::class => 'Ready for second reading',
-                FinalDocument::class => 'Ready for third reading',
+                FinalDocument::class => ($document?->document_type->requiresThirdReading() ?? true)
+                    ? 'Ready for third reading'
+                    : 'Ready for agenda',
                 default => $document?->document_type->isMeasure()
                     ? 'Ready for first reading'
                     : 'Ready for agenda',
             };
         }
 
-        if ($stateClass === Archive::class && $fromClass === CommitteeReview::class) {
-            return 'Lay on the table';
+        if ($stateClass === Archive::class && $fromClass === CommitteeReport::class) {
+            return 'Archive';
         }
 
         if ($stateClass === ReadingDeliberation::class && $fromClass === Voting::class) {
@@ -234,7 +266,9 @@ abstract class DocumentWorkflowStatus extends State
         }
 
         if ($stateClass === FinalDocument::class && $fromClass === Voting::class) {
-            return 'Prepare final form';
+            return ($document?->document_type->requiresThirdReading() ?? true)
+                ? 'Prepare final form'
+                : 'Prepare final document';
         }
 
         if ($stateClass === Transmittal::class) {
@@ -246,7 +280,9 @@ abstract class DocumentWorkflowStatus extends State
 
             return match ($reading) {
                 2 => 'Open second reading',
-                3 => 'Open third reading',
+                3 => ($document?->document_type->requiresThirdReading() ?? true)
+                    ? 'Open third reading'
+                    : 'Open second reading',
                 default => 'Open first reading',
             };
         }

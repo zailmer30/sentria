@@ -260,6 +260,7 @@ class GuardedStateTransition
         $publication->forceFill([
             'published_at' => $now,
             'published_by' => $actor->getKey(),
+            'unpublished_at' => null,
         ])->save();
 
         $document = $publication->document;

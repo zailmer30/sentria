@@ -32,6 +32,25 @@ class HallDisplayController extends Controller
         return back()->with('success', 'sessions.hall.document_projected');
     }
 
+    public function showReport(Request $request, LegislativeSession $session): RedirectResponse
+    {
+        $this->authorize('controlHallDisplay', $session);
+
+        $validated = $request->validate([
+            'agenda_item_id' => ['required', 'ulid', 'exists:agenda_items,id'],
+        ]);
+
+        $agendaItem = $this->agendaItemForSession($session, $validated['agenda_item_id']);
+
+        try {
+            $this->hall->showReport($session, $agendaItem, $this->requireUser($request));
+        } catch (InvalidArgumentException $exception) {
+            return back()->with('error', $exception->getMessage());
+        }
+
+        return back()->with('success', 'sessions.hall.report_projected');
+    }
+
     public function showItem(Request $request, LegislativeSession $session): RedirectResponse
     {
         $this->authorize('controlHallDisplay', $session);

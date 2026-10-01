@@ -19,6 +19,7 @@ use Illuminate\Support\Carbon;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
+use Illuminate\Validation\ValidationException;
 use InvalidArgumentException;
 
 class DocumentVersionService
@@ -35,8 +36,8 @@ class DocumentVersionService
      *     document_type: string,
      *     confidentiality?: string,
      *     abstract?: string|null,
+     *     external_author?: string|null,
      *     enacting_clause?: string|null,
-     *     proposed_effectivity?: int|null,
      *     explanatory_note?: string|null,
      *     committee_id?: string|null,
      *     session_id?: string|null,
@@ -62,8 +63,8 @@ class DocumentVersionService
                 'title' => $meta['title'],
                 'slug' => $this->uniqueSlug($meta['title']),
                 'abstract' => $meta['abstract'] ?? null,
+                'external_author' => $meta['external_author'] ?? null,
                 'enacting_clause' => $meta['enacting_clause'] ?? null,
-                'proposed_effectivity' => $meta['proposed_effectivity'] ?? null,
                 'explanatory_note' => $meta['explanatory_note'] ?? null,
                 'document_type' => $meta['document_type'],
                 'status' => $meta['status'] ?? Submitted::$name,
@@ -133,10 +134,11 @@ class DocumentVersionService
         User $user,
         UploadedFile $file,
         ?string $changeSummary = null,
+        bool $rejectUnsafeScan = false,
     ): DocumentVersion {
         $this->assertAllowedMime($file);
 
-        return DB::transaction(function () use ($document, $user, $file, $changeSummary): DocumentVersion {
+        return DB::transaction(function () use ($document, $user, $file, $changeSummary, $rejectUnsafeScan): DocumentVersion {
             $nextNumber = ($document->version_count ?? 0) + 1;
 
             DocumentVersion::query()
@@ -151,6 +153,7 @@ class DocumentVersionService
                 $nextNumber,
                 $changeSummary,
                 markCurrent: true,
+                rejectUnsafeScan: $rejectUnsafeScan,
             );
 
             $this->audit->record(
@@ -177,6 +180,7 @@ class DocumentVersionService
         ?string $changeSummary,
         bool $markCurrent,
         bool $ingestAfterResponse = false,
+        bool $rejectUnsafeScan = false,
     ): DocumentVersion {
         $mimeType = $file->getMimeType() ?? 'application/octet-stream';
         $extension = $file->getClientOriginalExtension() ?: 'bin';
@@ -197,6 +201,14 @@ class DocumentVersionService
 
         $absolutePath = Storage::disk('local')->path($relativePath);
         $scan = $this->scanner->scan($absolutePath);
+
+        if ($rejectUnsafeScan && ! $scan->isSafeToServe()) {
+            Storage::disk('local')->delete($relativePath);
+
+            throw ValidationException::withMessages([
+                'file' => 'The signed copy did not pass the security scan and was not attached.',
+            ]);
+        }
 
         $version = DocumentVersion::query()->create([
             'document_id' => $document->getKey(),

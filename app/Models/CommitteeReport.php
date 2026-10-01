@@ -28,6 +28,15 @@ class CommitteeReport extends Model implements Auditable
     use SoftDeletes;
 
     /** @var list<string> */
+    public const PLENARY_RECOMMENDATIONS = ['approve', 'amend', 'disapprove', 'no-action'];
+
+    /** @var list<string> */
+    public const SECOND_READING_RECOMMENDATIONS = ['approve', 'amend'];
+
+    /** @var list<string> */
+    public const ARCHIVE_RECOMMENDATIONS = ['disapprove', 'no-action'];
+
+    /** @var list<string> */
     protected $guarded = ['id'];
 
     /**
@@ -70,5 +79,25 @@ class CommitteeReport extends Model implements Auditable
     public function submitter(): BelongsTo
     {
         return $this->belongsTo(User::class, 'submitted_by');
+    }
+
+    public function isPlenaryRecommendation(): bool
+    {
+        return in_array($this->recommendation, self::PLENARY_RECOMMENDATIONS, true);
+    }
+
+    public function routesToSecondReading(): bool
+    {
+        return in_array($this->recommendation, self::SECOND_READING_RECOMMENDATIONS, true);
+    }
+
+    public function routesToArchive(): bool
+    {
+        return in_array($this->recommendation, self::ARCHIVE_RECOMMENDATIONS, true);
+    }
+
+    public function isDeferred(): bool
+    {
+        return $this->recommendation === 'defer';
     }
 }

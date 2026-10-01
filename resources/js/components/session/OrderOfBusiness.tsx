@@ -15,26 +15,49 @@ type OrderOfBusinessProps = {
      * itself back into view as the sitting advances.
      */
     display?: boolean;
+    /**
+     * Secretariat rail: cap height and scroll inside the panel so a long
+     * reading pack does not stretch the whole page.
+     */
+    scrollable?: boolean;
 };
 
-export function OrderOfBusiness({ items, currentItemId, className, display = false }: OrderOfBusinessProps) {
+export function OrderOfBusiness({
+    items,
+    currentItemId,
+    className,
+    display = false,
+    scrollable = false,
+}: OrderOfBusinessProps) {
     const { t } = useTranslations();
     const currentRef = useRef<HTMLLIElement | null>(null);
 
-    const completed = items.filter((item) => item.status === 'completed' || item.status === 'postponed').length;
+    const completed = items.filter((item) => item.status === 'completed' || item.status === 'postponed' || item.status === 'considered').length;
     const progress = items.length > 0 ? Math.round((completed / items.length) * 100) : 0;
 
+    const trackCurrent = display || scrollable;
+
     useEffect(() => {
-        if (!display) {
+        if (!trackCurrent) {
             return;
         }
 
-        currentRef.current?.scrollIntoView({ block: 'center', behavior: 'smooth' });
-    }, [display, currentItemId]);
+        currentRef.current?.scrollIntoView({
+            block: scrollable ? 'nearest' : 'center',
+            behavior: 'smooth',
+        });
+    }, [trackCurrent, scrollable, currentItemId]);
 
     return (
-        <Panel as="section" className={cn(display && 'flex min-h-0 flex-col overflow-hidden', className)}>
-            <PanelHead className={cn('px-4 py-3', display && 'shrink-0')}>
+        <Panel
+            as="section"
+            className={cn(
+                (display || scrollable) && 'flex min-h-0 flex-col overflow-hidden',
+                scrollable && 'max-h-[min(calc(100dvh-8rem),42rem)]',
+                className,
+            )}
+        >
+            <PanelHead className={cn('px-4 py-3', (display || scrollable) && 'shrink-0')}>
                 <PanelTitle className={display ? 'text-[clamp(0.875rem,1vw,1.125rem)]' : undefined}>
                     {t('sessions.order_of_business')}
                 </PanelTitle>
@@ -47,7 +70,12 @@ export function OrderOfBusiness({ items, currentItemId, className, display = fal
                     {completed}/{items.length}
                 </span>
             </PanelHead>
-            <PanelBody className={cn('space-y-3 px-4 py-3', display && 'min-h-0 flex-1 overflow-y-auto overscroll-contain')}>
+            <PanelBody
+                className={cn(
+                    'space-y-3 px-4 py-3',
+                    (display || scrollable) && 'min-h-0 flex-1 overflow-y-auto overscroll-contain',
+                )}
+            >
                 <div
                     className={cn('overflow-hidden rounded-full bg-[var(--color-chart-track)]', display ? 'h-1.5' : 'h-1')}
                     role="progressbar"
@@ -69,6 +97,7 @@ export function OrderOfBusiness({ items, currentItemId, className, display = fal
                         {items.map((item, index) => {
                             const done = item.status === 'completed';
                             const postponed = item.status === 'postponed';
+                            const considered = item.status === 'considered';
                             const current = item.id === currentItemId || item.status === 'in-progress';
                             const number = formatAgendaNumber(item.item_number, index);
                             const depth = nestingDepth(item, items);
@@ -92,13 +121,15 @@ export function OrderOfBusiness({ items, currentItemId, className, display = fal
                                                 ? 'border-success bg-success text-ink-inverse'
                                                 : postponed
                                                   ? 'border-[var(--color-warning-line)] bg-warning-soft text-warning'
+                                                  : considered
+                                                    ? 'border-line-strong bg-canvas-sunk text-ink-muted'
                                                 : current
                                                   ? 'border-accent bg-accent text-ink-inverse'
                                                   : 'border-line-strong bg-surface text-transparent',
                                         )}
                                         aria-hidden="true"
                                     >
-                                        {done || current ? <Check className="size-3" strokeWidth={2.5} /> : null}
+                                        {done || current || considered ? <Check className="size-3" strokeWidth={2.5} /> : null}
                                     </span>
                                     <span
                                         className={cn(
@@ -117,11 +148,18 @@ export function OrderOfBusiness({ items, currentItemId, className, display = fal
                                                 ? 'text-ink-muted line-through decoration-line-strong'
                                                 : postponed
                                                   ? 'text-ink-muted'
+                                                  : considered
+                                                    ? 'text-ink-muted'
                                                   : 'font-medium text-ink',
                                             current && !done && 'text-accent-ink',
                                         )}
                                     >
                                         {item.title}
+                                        {considered && !current ? (
+                                            <span className="mt-0.5 block text-2xs font-medium tracking-wide text-ink-faint uppercase">
+                                                {t('sessions.vote_pending')}
+                                            </span>
+                                        ) : null}
                                     </span>
                                 </li>
                             );

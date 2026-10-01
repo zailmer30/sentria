@@ -59,8 +59,14 @@ class PublicPortalSearchService
         }
 
         if ($author = trim((string) ($filters['author'] ?? ''))) {
-            $query->whereHas('document.author', fn (Builder $user) => $user
-                ->where('display_name', 'ilike', '%'.$author.'%'));
+            $like = '%'.$author.'%';
+            $query->whereHas('document', function (Builder $document) use ($like): void {
+                /** @var Builder<Document> $document */
+                $document->where(function (Builder $match) use ($like): void {
+                    $match->where('external_author', 'ilike', $like)
+                        ->orWhereHas('author', fn (Builder $user) => $user->where('display_name', 'ilike', $like));
+                });
+            });
         }
 
         if ($committee = trim((string) ($filters['committee'] ?? ''))) {

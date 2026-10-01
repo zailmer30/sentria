@@ -31,7 +31,7 @@ class StoreCommitteeReportRequest extends FormRequest
             'recommendation' => ['required', 'string', Rule::in(['approve', 'disapprove', 'amend', 'defer', 'no-action'])],
             'findings' => ['nullable', 'string', 'max:10000'],
             'recommendation_notes' => ['nullable', 'string', 'max:10000'],
-            'report_number' => ['nullable', 'string', 'max:60', 'unique:committee_reports,report_number'],
+            'file_now' => ['sometimes', 'boolean'],
         ];
     }
 }

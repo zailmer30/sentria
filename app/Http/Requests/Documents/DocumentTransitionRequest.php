@@ -2,6 +2,7 @@
 
 namespace App\Http\Requests\Documents;
 
+use App\Http\Requests\Concerns\ResolvesCommitteeReferralInput;
 use App\States\Document\AgendaInclusion;
 use App\States\Document\Amendments;
 use App\States\Document\Approved;
@@ -25,9 +26,16 @@ use Illuminate\Validation\Rule;
 
 class DocumentTransitionRequest extends FormRequest
 {
+    use ResolvesCommitteeReferralInput;
+
     public function authorize(): bool
     {
         return $this->user() !== null;
+    }
+
+    protected function prepareForValidation(): void
+    {
+        $this->prepareCommitteeReferralInput();
     }
 
     /**
@@ -44,12 +52,7 @@ class DocumentTransitionRequest extends FormRequest
                 'min:3',
                 'max:2000',
             ],
-            'committee_id' => [
-                Rule::requiredIf($this->input('to') === CommitteeReferral::$name),
-                'nullable',
-                'ulid',
-                'exists:committees,id',
-            ],
+            ...$this->committeeReferralDetailRules($this->input('to') === CommitteeReferral::$name),
         ];
     }
 

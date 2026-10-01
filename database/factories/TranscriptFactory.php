@@ -31,14 +31,23 @@ class TranscriptFactory extends Factory
             'average_confidence' => fake()->randomFloat(4, 0.75, 0.98),
             'duration_seconds' => fake()->numberBetween(1800, 14400),
             'full_text' => fake()->paragraphs(10, true),
-            'segments' => collect(range(1, 5))->map(fn (int $i): array => [
-                'index' => $i,
-                'start' => $i * 30,
-                'end' => ($i + 1) * 30,
-                'speaker' => 'Speaker '.$i,
-                'text' => fake()->sentence(14),
-                'confidence' => fake()->randomFloat(4, 0.7, 0.99),
-            ])->all(),
+            'segments' => collect(range(1, 5))->map(function (int $i): array {
+                $text = fake()->sentence(14);
+                $speaker = 'Speaker '.$i;
+
+                return [
+                    'index' => $i,
+                    'start' => $i * 30,
+                    'end' => ($i + 1) * 30,
+                    'speaker' => $speaker,
+                    'text' => $text,
+                    'original_text' => $text,
+                    'original_speaker' => $speaker,
+                    'original_speaker_id' => null,
+                    'original_attributed' => true,
+                    'confidence' => fake()->randomFloat(4, 0.7, 0.99),
+                ];
+            })->all(),
             'started_at' => $started,
             'ended_at' => (clone $started)->modify('+2 hours'),
             'created_by' => User::factory(),

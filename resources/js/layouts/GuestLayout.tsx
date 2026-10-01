@@ -1,3 +1,4 @@
+import { BrandMark } from '@/components/branding/BrandMark';
 import { FlashRegion } from '@/components/ui/flash';
 import { Toaster } from '@/components/ui/sonner';
 import { ThemeToggle } from '@/components/ui/theme-toggle';
@@ -41,12 +42,7 @@ export default function GuestLayout({ title, children }: GuestLayoutProps) {
             <main id="main" className="mx-auto flex min-h-screen w-full max-w-lg flex-col justify-center px-5 py-14">
                 <div className="app-sheet px-7 py-8 sm:px-9 sm:py-10">
                     <div className="mb-7">
-                        <span
-                            aria-hidden="true"
-                            className="mb-4 flex size-10 items-center justify-center rounded-[var(--radius-md)] bg-accent font-mono text-md font-semibold text-[var(--color-accent-on)]"
-                        >
-                            S
-                        </span>
+                        <BrandMark className="mb-4" />
                         <p className="text-2xl font-semibold tracking-[-0.02em] text-ink">{t('app.name')}</p>
                         <p className="mt-2 max-w-sm text-sm text-ink-muted">{t('app.tagline')}</p>
                         <div className="mt-4 border-t border-line pt-3">

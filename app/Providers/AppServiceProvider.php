@@ -32,6 +32,9 @@ use App\Services\AI\TranscriptionServiceFactory;
 use App\Services\AI\VectorLegislativeSearchService;
 use App\Services\Audit\AuditChainHasher;
 use App\Services\Audit\AuditLogger;
+use App\Services\Branding\AccentPalette;
+use App\Services\Branding\BrandingService;
+use App\Services\Branding\BrandLogoService;
 use App\Services\Documents\DocumentAccessService;
 use App\Services\Documents\PlainTextDocumentComparisonService;
 use App\Services\Malware\NullMalwareScanner;
@@ -65,6 +68,9 @@ class AppServiceProvider extends ServiceProvider
 
         $this->app->singleton(AuditChainHasher::class);
         $this->app->singleton(AuditLogger::class);
+        $this->app->singleton(AccentPalette::class);
+        $this->app->singleton(BrandLogoService::class);
+        $this->app->singleton(BrandingService::class);
         $this->app->singleton(GuardedStateTransition::class);
         $this->app->singleton(DocumentAccessService::class);
         $this->app->singleton(PublicPortal::class);

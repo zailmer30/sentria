@@ -1,9 +1,13 @@
+import type { HallDocumentView } from '@/components/documents/DocumentPdfViewer';
+import { CommitteeReportBody, type CommitteeReportDetail } from '@/components/documents/CommitteeReportBody';
+import { BrandMark } from '@/components/branding/BrandMark';
 import { ChamberDocument } from '@/components/session/ChamberDocument';
+import { ChamberReport } from '@/components/session/ChamberReport';
 import { FloorRecognitionDock } from '@/components/session/FloorRecognitionDock';
 import { OrderOfBusiness } from '@/components/session/OrderOfBusiness';
 import { VoteBoard, VoteTotal } from '@/components/session/VoteBoard';
 import { Panel, PanelBody } from '@/components/ui/panel';
-import type { HallDocumentView } from '@/components/documents/DocumentPdfViewer';
+import { useHallAgendaSpeech } from '@/hooks/useHallAgendaSpeech';
 import { useOnlineStatus } from '@/hooks/useOnlineStatus';
 import { useSessionEcho } from '@/hooks/useSessionEcho';
 import SessionLayout from '@/layouts/SessionLayout';
@@ -12,7 +16,7 @@ import { sessionDisplayTitle, withHonorific } from '@/lib/sessionFloor';
 import { cn } from '@/lib/utils';
 import type { PageProps } from '@/types';
 import { usePage } from '@inertiajs/react';
-import { FileText, Maximize2, Minimize2, WifiOff } from 'lucide-react';
+import { FileText, Maximize2, Minimize2, Volume2, VolumeX, WifiOff, type LucideIcon } from 'lucide-react';
 import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import {
     formatAgendaNumber,
@@ -35,11 +39,11 @@ import {
  * same markup carries from a laptop preview to a projector wall. The board
  * shows one thing at a time, because a room cannot be asked to choose where to
  * look. And the one thing it shows is decided by the secretariat console: a
- * vote outranks a projected document, a projected document outranks a title
+ * vote outranks a projected document or report, and those outrank a title
  * card. The board itself never decides.
  *
- * Present mode is still available as a projector gesture (fullscreen), but
- * stage pins and voting controls stay on the console.
+ * Present mode and chamber audio live in the idle projector chrome. Stage
+ * pins and voting controls stay on the console.
  */
 
 /**
@@ -60,12 +64,12 @@ const HALL_ECHO_PROPS = [
 /** How long the room sits still before the projector controls withdraw. */
 const IDLE_MS = 4000;
 
-type HallStage = 'item' | 'document' | 'results';
+type HallStage = 'item' | 'document' | 'report' | 'results';
 
-type Stage = 'vote' | 'document' | 'item' | 'recess';
+type Stage = 'vote' | 'document' | 'report' | 'item' | 'recess';
 
 function parseHallStage(value: unknown): HallStage {
-    if (value === 'document' || value === 'results') {
+    if (value === 'document' || value === 'report' || value === 'results') {
         return value;
     }
 
@@ -116,16 +120,19 @@ export default function DashboardFloor({
     hall_display = { stage: 'item', agenda_item_id: null, view: null },
     recognition = { pending: [], recognized: null },
 }: FloorProps) {
-    const { t } = useTranslations();
+    const { t, locale } = useTranslations();
     const { organization } = usePage<PageProps>().props;
     const online = useOnlineStatus();
+    const {
+        available: hallSpeechAvailable,
+        enabled: hallSpeechEnabled,
+        toggle: toggleHallSpeech,
+    } = useHallAgendaSpeech(current_item, locale);
 
     const [liveHall, setLiveHall] = useState(hall_display);
     const [liveVoting, setLiveVoting] = useState(voting);
     const [liveRecognition, setLiveRecognition] = useState(recognition);
-    const [documentView, setDocumentView] = useState<HallDocumentView | null>(
-        () => hall_display.view ?? null,
-    );
+    const [documentView, setDocumentView] = useState<HallDocumentView | null>(() => hall_display.view ?? null);
 
     useEffect(() => {
         setLiveHall(hall_display);
@@ -173,11 +180,7 @@ export default function DashboardFloor({
     const onVoteCast = useCallback((payload: Record<string, unknown>) => {
         const tallies = payload.tallies;
 
-        if (
-            typeof tallies !== 'object' ||
-            tallies === null ||
-            typeof (tallies as { yes?: unknown }).yes !== 'number'
-        ) {
+        if (typeof tallies !== 'object' || tallies === null || typeof (tallies as { yes?: unknown }).yes !== 'number') {
             return;
         }
 
@@ -210,7 +213,9 @@ export default function DashboardFloor({
     const present = attendance.filter((row) => row.status === 'present' || row.status === 'late');
 
     const projectedId =
-        liveHall.stage === 'document' ? (liveHall.agenda_item_id ?? current_item?.id ?? null) : null;
+        liveHall.stage === 'document' || liveHall.stage === 'report'
+            ? (liveHall.agenda_item_id ?? current_item?.id ?? null)
+            : null;
     const packItem =
         (projectedId ? reading_pack.find((row) => row.id === projectedId) : null) ??
         reading_pack.find((row) => row.id === current_item?.id) ??
@@ -220,13 +225,18 @@ export default function DashboardFloor({
     const showingResult = !liveVoting.open && liveHall.stage === 'results' && previous !== null;
     const recessed = isTimedRecess(session);
 
-    const stage: Stage = liveVoting.open || showingResult
-        ? 'vote'
-        : recessed
-          ? 'recess'
-          : liveHall.stage === 'document' && packItem?.document
-            ? 'document'
-            : 'item';
+    const stage: Stage =
+        liveVoting.open || showingResult
+            ? 'vote'
+            : recessed
+              ? 'recess'
+              : liveHall.stage === 'document' && packItem?.document
+                ? 'document'
+                : liveHall.stage === 'report' && packItem?.committee_report
+                  ? 'report'
+                  : 'item';
+
+    const convening = stage === 'item' && current_item === null;
 
     const controls = (
         <div
@@ -235,6 +245,18 @@ export default function DashboardFloor({
                 idle && 'pointer-events-none opacity-0',
             )}
         >
+            <PlateButton
+                onClick={toggleHallSpeech}
+                icon={hallSpeechEnabled ? Volume2 : VolumeX}
+                label={
+                    hallSpeechAvailable
+                        ? t(hallSpeechEnabled ? 'sessions.hall.disable_audio' : 'sessions.hall.enable_audio')
+                        : t('sessions.hall.audio_unavailable')
+                }
+                iconOnly
+                pressed={hallSpeechEnabled}
+                disabled={!hallSpeechAvailable}
+            />
             <PlateButton
                 onClick={presenting ? leave : enter}
                 icon={presenting ? Minimize2 : Maximize2}
@@ -263,6 +285,7 @@ export default function DashboardFloor({
                     wallClock={wallClock}
                     live={session.status === 'in-session'}
                     online={online}
+                    convening={convening}
                     t={t}
                 />
 
@@ -271,16 +294,25 @@ export default function DashboardFloor({
                 <div className="grid min-h-0 flex-1 grid-cols-1 overflow-y-auto lg:grid-cols-[minmax(0,1fr)_clamp(17rem,22vw,25rem)] lg:overflow-hidden">
                     <div className="flex min-h-0 flex-col overflow-hidden">
                         {stage === 'recess' ? (
-                            <RecessStage remainingFromServer={session.recess_remaining_seconds ?? 0} controls={controls} t={t} />
+                            <RecessStage
+                                remainingFromServer={session.recess_remaining_seconds ?? 0}
+                                organization={organization}
+                                controls={controls}
+                                t={t}
+                            />
+                        ) : convening ? (
+                            <ConveningCard hero={conveningHero(session, t)} organization={organization} controls={controls} />
                         ) : (
                             <>
                                 <HallPlate
                                     item={current_item}
                                     nextItem={next_item}
+                                    report={packItem?.committee_report ?? current_item?.committee_report ?? null}
                                     full={stage === 'item'}
                                     voting={liveVoting.open}
                                     result={showingResult}
                                     wallClock={null}
+                                    organization={organization}
                                     controls={controls}
                                     t={t}
                                 />
@@ -291,6 +323,10 @@ export default function DashboardFloor({
                                         view={documentView}
                                         className="min-h-[24rem] flex-1 lg:min-h-0"
                                     />
+                                ) : null}
+
+                                {stage === 'report' ? (
+                                    <ChamberReport item={packItem} className="min-h-[24rem] flex-1 lg:min-h-0" />
                                 ) : null}
 
                                 {stage === 'vote' ? (
@@ -341,6 +377,7 @@ function HallIdentity({
     wallClock,
     live,
     online,
+    convening = false,
     t,
 }: {
     organization: string;
@@ -350,18 +387,27 @@ function HallIdentity({
     wallClock: string | null;
     live: boolean;
     online: boolean;
+    /** The convening card is carrying the sitting title and the sanggunian name. */
+    convening?: boolean;
     t: Translate;
 }) {
     const officer = withHonorific(presidingOfficer);
-    const meta = [organization, venue, officer ? t('sessions.presided_by', { name: officer }) : null].filter(Boolean);
+    const meta = [convening ? null : organization, venue, officer ? t('sessions.presided_by', { name: officer }) : null].filter(
+        Boolean,
+    );
+    const sittingTitle = convening ? null : sessionDisplayTitle(title);
 
     return (
         <header className="flex shrink-0 flex-wrap items-center justify-between gap-x-6 gap-y-1 border-b border-line bg-surface px-5 py-2.5 md:px-7">
             <div className="min-w-0">
-                <h1 className="truncate text-[clamp(0.9375rem,1.3vw,1.5rem)] font-semibold tracking-[-0.015em] text-ink">
-                    {sessionDisplayTitle(title)}
-                </h1>
-                <p className="truncate text-[clamp(0.75rem,0.9vw,1rem)] text-ink-muted">{meta.join(' · ')}</p>
+                {sittingTitle ? (
+                    <h1 className="truncate text-[clamp(0.9375rem,1.3vw,1.5rem)] font-semibold tracking-[-0.015em] text-ink">
+                        {sittingTitle}
+                    </h1>
+                ) : null}
+                {meta.length > 0 ? (
+                    <p className="truncate text-[clamp(0.75rem,0.9vw,1rem)] text-ink-muted">{meta.join(' · ')}</p>
+                ) : null}
             </div>
 
             <div className="flex shrink-0 items-center gap-3">
@@ -386,40 +432,56 @@ function HallIdentity({
 }
 
 /**
- * The item on the floor, on the chamber's navy plate. It runs the full height
- * of the stage when there is nothing else to show, and shrinks to a band when
- * the document or the tally takes over — but it never leaves, because a room
- * that loses track of which item is being debated has lost the sitting.
+ * The item on the floor, on the chamber's navy plate. The organisation lockup
+ * stays pinned to the top; the item occupies the middle of whatever height
+ * the plate has left. It shrinks to a band when a document or tally takes
+ * over — but it never leaves, because a room that loses track of which item
+ * is being debated has lost the sitting.
  */
 function HallPlate({
     item,
     nextItem,
+    report = null,
     full,
     voting,
     result = false,
     wallClock,
+    organization,
     controls,
     t,
 }: {
     item: AgendaItem | null;
     nextItem: AgendaItem | null;
+    report?: CommitteeReportDetail | null;
     full: boolean;
     voting: boolean;
     result?: boolean;
     wallClock: string | null;
+    organization: PageProps['organization'];
     controls: ReactNode;
     t: Translate;
 }) {
+    const reportNumber = report?.report_number ?? null;
+
     return (
         <section
             className={cn(
                 'relative flex flex-col overflow-hidden bg-floor-plate px-5 text-floor-ink md:px-7',
-                full ? 'min-h-[18rem] flex-1 justify-center py-8' : 'shrink-0 py-4',
+                full ? 'min-h-[18rem] flex-1 py-5 md:py-6' : 'shrink-0 py-4',
             )}
         >
-            <div className="flex items-start justify-between gap-4">
-                <div className="flex min-w-0 flex-wrap items-center gap-2.5">
-                    <p className="text-eyebrow text-floor-ink-faint">{t('sessions.current_item')}</p>
+            <HallBrandLockup name={organization.name} locality={organization.locality} controls={controls} />
+
+            <div
+                className={cn(
+                    'flex min-w-0 flex-col items-center text-center',
+                    full ? 'min-h-0 flex-1 justify-center overflow-y-auto py-6' : 'mt-4',
+                )}
+            >
+                <div className="flex flex-wrap items-center justify-center gap-2.5">
+                    <p className="text-eyebrow text-floor-ink-faint">
+                        {full && report ? t('sessions.committee_hour.title') : t('sessions.current_item')}
+                    </p>
                     {voting ? (
                         <span className="inline-flex items-center gap-1.5 rounded-full bg-live px-2.5 py-1 text-2xs font-bold tracking-wide text-live-on uppercase">
                             <span aria-hidden="true" className="animate-live-pulse size-1.5 rounded-full bg-live-on" />
@@ -436,52 +498,164 @@ function HallPlate({
                     ) : null}
                 </div>
 
-                {controls}
-            </div>
+                {item ? (
+                    <div className={cn('min-w-0', full ? 'mt-5 w-full' : 'mt-2')}>
+                        <h2
+                            className={cn(
+                                'flex flex-wrap items-baseline justify-center gap-x-[0.4em] font-semibold tracking-[-0.025em] text-floor-ink',
+                                full && report
+                                    ? 'text-[clamp(1.5rem,3.2vw,3.5rem)] leading-tight'
+                                    : full
+                                      ? 'text-[clamp(2rem,5.5vw,6rem)] leading-[1.05]'
+                                      : 'text-[clamp(1.25rem,2.6vw,3rem)] leading-tight',
+                            )}
+                        >
+                            {item.item_number ? (
+                                <span className="font-mono font-bold tracking-[-0.04em] text-floor-ink-muted">
+                                    {formatAgendaNumber(item.item_number)}
+                                </span>
+                            ) : null}
+                            <span className="min-w-0">{item.title}</span>
+                        </h2>
 
-            {item ? (
-                <div className={cn('min-w-0', full ? 'mt-6' : 'mt-2')}>
-                    <h2
+                        {full && reportNumber ? (
+                            <p className="mt-3 font-mono text-[clamp(0.9375rem,1.3vw,1.5rem)] text-floor-ink-muted">
+                                {reportNumber}
+                            </p>
+                        ) : null}
+
+                        {full && report ? (
+                            <div className="mt-8">
+                                <CommitteeReportBody report={report} display />
+                            </div>
+                        ) : full && item.description ? (
+                            <p className="mx-auto mt-5 max-w-[60ch] text-[clamp(1rem,1.5vw,1.75rem)] leading-relaxed text-floor-ink-muted">
+                                {item.description}
+                            </p>
+                        ) : null}
+                    </div>
+                ) : (
+                    <p
                         className={cn(
-                            'flex flex-wrap items-baseline gap-x-[0.4em] font-semibold tracking-[-0.025em] text-floor-ink',
-                            full
-                                ? 'text-[clamp(2rem,5.5vw,6rem)] leading-[1.05]'
-                                : 'text-[clamp(1.25rem,2.6vw,3rem)] leading-tight',
+                            'text-floor-ink-muted',
+                            full ? 'mt-5 text-[clamp(1.5rem,3.5vw,3.5rem)]' : 'mt-2 text-[clamp(1rem,2vw,2rem)]',
                         )}
                     >
-                        {item.item_number ? (
-                            <span className="font-mono font-bold tracking-[-0.04em] text-floor-ink-muted">
-                                {formatAgendaNumber(item.item_number)}
-                            </span>
-                        ) : null}
-                        <span className="min-w-0">{item.title}</span>
-                    </h2>
-
-                    {full && item.description ? (
-                        <p className="mt-6 max-w-[60ch] text-[clamp(1rem,1.5vw,1.75rem)] leading-relaxed text-floor-ink-muted">
-                            {item.description}
-                        </p>
-                    ) : null}
-                </div>
-            ) : (
-                <p
-                    className={cn(
-                        'text-floor-ink-muted',
-                        full ? 'mt-6 text-[clamp(1.5rem,3.5vw,3.5rem)]' : 'mt-2 text-[clamp(1rem,2vw,2rem)]',
-                    )}
-                >
-                    {t('sessions.no_current_item')}
-                </p>
-            )}
+                        {t('sessions.no_current_item')}
+                    </p>
+                )}
+            </div>
 
             {full && nextItem ? (
-                <p className="mt-auto flex flex-wrap items-baseline gap-x-2.5 pt-8 text-[clamp(0.875rem,1.2vw,1.375rem)] text-floor-ink-faint">
+                <p className="mt-auto flex flex-wrap items-baseline justify-center gap-x-2.5 pt-6 text-center text-[clamp(0.875rem,1.2vw,1.375rem)] text-floor-ink-faint">
                     <span className="text-eyebrow">{t('sessions.next_item')}</span>
                     {nextItem.item_number ? <span className="font-mono">{formatAgendaNumber(nextItem.item_number)}</span> : null}
                     <span className="text-floor-ink-muted">{nextItem.title}</span>
                 </p>
             ) : null}
         </section>
+    );
+}
+
+/**
+ * The hall before any agenda row is open, and again after the last one closes.
+ * Seal, sanggunian name, locality, then the sitting's own title.
+ */
+function ConveningCard({
+    hero,
+    organization,
+    controls,
+}: {
+    hero: string;
+    organization: PageProps['organization'];
+    controls: ReactNode;
+}) {
+    const locality = organization.locality.trim();
+
+    return (
+        <section className="relative flex min-h-[18rem] flex-1 flex-col overflow-hidden bg-floor-plate px-5 py-5 text-floor-ink md:px-7 md:py-6">
+            <div className="absolute top-4 right-4 z-10 md:top-5 md:right-6">{controls}</div>
+
+            <div className="flex min-h-0 flex-1 flex-col items-center justify-center px-4 py-16 text-center">
+                <BrandMark
+                    className="size-[clamp(4.5rem,9vw,8rem)] rounded-full bg-white p-1.5"
+                    fallbackClassName="rounded-full bg-white text-floor-plate"
+                />
+                <p className="mt-6 max-w-[28ch] text-[clamp(1.25rem,2.4vw,2.5rem)] leading-tight font-semibold tracking-[-0.02em] text-floor-ink">
+                    {organization.name}
+                </p>
+                {locality ? (
+                    <p className="mt-1.5 max-w-[32ch] text-[clamp(0.875rem,1.3vw,1.25rem)] text-floor-ink-muted">{locality}</p>
+                ) : null}
+                {hero ? (
+                    <h1 className="mt-8 max-w-[18ch] text-[clamp(2rem,5.5vw,6rem)] leading-[1.05] font-semibold tracking-[-0.025em] text-floor-ink">
+                        {hero}
+                    </h1>
+                ) : null}
+            </div>
+        </section>
+    );
+}
+
+function sessionTypeKey(type: string | null | undefined): string | null {
+    switch (type) {
+        case 'regular':
+            return 'sessions.type_regular';
+        case 'special':
+            return 'sessions.type_special';
+        case 'committee-hearing':
+            return 'sessions.type_committee';
+        case 'public-hearing':
+            return 'sessions.type_public';
+        default:
+            return null;
+    }
+}
+
+function conveningHero(session: FloorProps['session'], t: Translate): string {
+    const own = sessionDisplayTitle(session.title.trim() ? session.title : null);
+
+    if (own) {
+        return own;
+    }
+
+    const key = sessionTypeKey(session.type);
+
+    if (key) {
+        return t(key);
+    }
+
+    return session.type_label?.trim() ?? '';
+}
+
+/** Seal and organisation name, pinned to the top of the chamber plate. */
+function HallBrandLockup({
+    name,
+    locality,
+    controls,
+}: {
+    name: string;
+    locality: string;
+    controls?: ReactNode;
+}) {
+    return (
+        <header className="flex shrink-0 items-start justify-between gap-4">
+            <div className="flex min-w-0 items-center gap-3 md:gap-4">
+                <BrandMark
+                    className="size-[clamp(2.75rem,4vw,4.5rem)] rounded-full bg-white p-1"
+                    fallbackClassName="rounded-full bg-white text-floor-plate"
+                />
+                <div className="min-w-0">
+                    <p className="truncate text-[clamp(1.0625rem,1.7vw,1.875rem)] leading-tight font-semibold tracking-[-0.02em] text-floor-ink">
+                        {name}
+                    </p>
+                    {locality ? (
+                        <p className="mt-0.5 truncate text-[clamp(0.75rem,1vw,1.0625rem)] text-floor-ink-muted">{locality}</p>
+                    ) : null}
+                </div>
+            </div>
+            {controls}
+        </header>
     );
 }
 
@@ -534,10 +708,12 @@ function VoteStage({
 /** The one clock on the board. Recess remaining, or Recess ended until the clerk resumes. */
 function RecessStage({
     remainingFromServer,
+    organization,
     controls,
     t,
 }: {
     remainingFromServer: number;
+    organization: PageProps['organization'];
     controls: ReactNode;
     t: Translate;
 }) {
@@ -545,20 +721,22 @@ function RecessStage({
     const ended = remaining === 0;
 
     return (
-        <section className="relative flex min-h-[18rem] flex-1 flex-col justify-center overflow-hidden bg-floor-plate px-5 py-8 text-floor-ink md:px-7">
-            <div className="absolute inset-x-5 top-4 flex justify-end md:inset-x-7">{controls}</div>
-            <p className="text-eyebrow text-floor-ink-faint">
-                {ended ? t('sessions.recess_ended') : t('sessions.action_recess')}
-            </p>
-            <p
-                className="mt-6 font-mono font-semibold tracking-[-0.06em] text-floor-ink tabular-nums text-[clamp(2.75rem,12vw,9rem)] leading-none"
-                aria-live="polite"
-            >
-                {formatClockCountdown(remaining)}
-            </p>
-            <p className="mt-6 max-w-[40ch] text-[clamp(1rem,1.5vw,1.75rem)] leading-relaxed text-floor-ink-muted">
-                {ended ? t('sessions.recess_ended_hint') : t('sessions.recess_until_resume')}
-            </p>
+        <section className="relative flex min-h-[18rem] flex-1 flex-col overflow-hidden bg-floor-plate px-5 py-5 text-floor-ink md:px-7 md:py-6">
+            <HallBrandLockup name={organization.name} locality={organization.locality} controls={controls} />
+            <div className="flex min-h-0 flex-1 flex-col items-center justify-center text-center">
+                <p className="text-eyebrow text-floor-ink-faint">
+                    {ended ? t('sessions.recess_ended') : t('sessions.action_recess')}
+                </p>
+                <p
+                    className="mt-6 font-mono text-[clamp(2.75rem,12vw,9rem)] leading-none font-semibold tracking-[-0.06em] text-floor-ink tabular-nums"
+                    aria-live="polite"
+                >
+                    {formatClockCountdown(remaining)}
+                </p>
+                <p className="mt-6 max-w-[40ch] text-[clamp(1rem,1.5vw,1.75rem)] leading-relaxed text-floor-ink-muted">
+                    {ended ? t('sessions.recess_ended_hint') : t('sessions.recess_until_resume')}
+                </p>
+            </div>
         </section>
     );
 }
@@ -569,21 +747,29 @@ function PlateButton({
     icon: Icon,
     label,
     iconOnly = false,
+    pressed,
+    disabled = false,
 }: {
     onClick: () => void;
-    icon: typeof Maximize2;
+    icon: LucideIcon;
     label: string;
     iconOnly?: boolean;
+    pressed?: boolean;
+    disabled?: boolean;
 }) {
     return (
         <button
             type="button"
             onClick={onClick}
+            disabled={disabled}
+            aria-pressed={typeof pressed === 'boolean' ? pressed : undefined}
             aria-label={iconOnly ? label : undefined}
-            title={iconOnly ? label : undefined}
+            title={label}
             className={cn(
                 'inline-flex min-h-9 items-center gap-1.5 rounded-full border border-floor-line bg-floor-sunk px-3 text-xs font-semibold text-floor-ink-muted transition-colors hover:text-floor-ink',
                 'focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--color-focus)]',
+                pressed && 'border-floor-ink text-floor-ink',
+                disabled && 'cursor-not-allowed opacity-40 hover:text-floor-ink-muted',
             )}
         >
             <Icon aria-hidden="true" strokeWidth={2} className="size-4 shrink-0" />

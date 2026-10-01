@@ -3,7 +3,9 @@
 namespace App\Models;
 
 use App\Enums\ChamberFeed;
+use App\States\Session\InSession;
 use App\States\Session\SessionStatus;
+use App\States\Session\Suspended;
 use Database\Factories\LegislativeSessionFactory;
 use Illuminate\Database\Eloquent\Attributes\Table;
 use Illuminate\Database\Eloquent\Attributes\UseFactory;
@@ -47,6 +49,7 @@ use Spatie\ModelStates\HasStates;
  * @property int|null $quorum_required
  * @property bool $is_public
  * @property bool $recording_enabled
+ * @property bool $defer_heading_votes
  * @property ChamberFeed $capture_mode
  * @property string|null $notes
  * @property string|null $secretariat_minutes
@@ -92,6 +95,7 @@ class LegislativeSession extends Model implements Auditable
             'legislative_year' => 'integer',
             'hall_display_view' => 'array',
             'recording_enabled' => 'boolean',
+            'defer_heading_votes' => 'boolean',
             'capture_mode' => ChamberFeed::class,
         ];
     }
@@ -141,6 +145,12 @@ class LegislativeSession extends Model implements Auditable
         return $this->hasMany(SessionAttendance::class, 'session_id');
     }
 
+    /** @return HasMany<SessionGuest, $this> */
+    public function guests(): HasMany
+    {
+        return $this->hasMany(SessionGuest::class, 'session_id')->orderBy('created_at')->orderBy('id');
+    }
+
     /** @return HasMany<Motion, $this> */
     public function motions(): HasMany
     {
@@ -165,10 +175,27 @@ class LegislativeSession extends Model implements Auditable
         return $this->hasOne(Minutes::class, 'session_id');
     }
 
+    /** @return HasMany<MinutesCorrection, $this> */
+    public function minutesCorrections(): HasMany
+    {
+        return $this->hasMany(MinutesCorrection::class, 'session_id')->orderBy('created_at');
+    }
+
     /** @return HasMany<Transcript, $this> */
     public function transcripts(): HasMany
     {
         return $this->hasMany(Transcript::class, 'session_id');
+    }
+
+    /** @return HasMany<SessionConversation, $this> */
+    public function conversations(): HasMany
+    {
+        return $this->hasMany(SessionConversation::class, 'session_id');
+    }
+
+    public function chatIsLive(): bool
+    {
+        return $this->status instanceof InSession || $this->status instanceof Suspended;
     }
 
     /** @return HasMany<Document, $this> */
@@ -197,7 +224,7 @@ class LegislativeSession extends Model implements Auditable
     {
         $attrs = $this->getAttributes();
         $rawStage = $attrs['hall_display_stage'] ?? 'item';
-        $stage = in_array($rawStage, ['document', 'results'], true) ? $rawStage : 'item';
+        $stage = in_array($rawStage, ['document', 'report', 'results'], true) ? $rawStage : 'item';
 
         $view = null;
 
@@ -221,7 +248,7 @@ class LegislativeSession extends Model implements Auditable
 
         return [
             'stage' => $stage,
-            'agenda_item_id' => in_array($stage, ['document', 'results'], true)
+            'agenda_item_id' => in_array($stage, ['document', 'report', 'results'], true)
                 ? ($attrs['hall_display_agenda_item_id'] ?? null)
                 : null,
             'view' => $view,

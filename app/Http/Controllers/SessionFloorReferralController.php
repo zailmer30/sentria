@@ -23,8 +23,10 @@ class SessionFloorReferralController extends Controller
             $this->referrals->refer(
                 $session,
                 $item,
-                $request->validated('committee_id'),
+                $request->committeeIds(),
                 $this->requireUser($request),
+                $request->meetingOn(),
+                $request->remarks(),
             );
         } catch (AuthorizationException $exception) {
             throw $exception;

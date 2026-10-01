@@ -70,6 +70,16 @@ class SessionFloorController extends Controller
         ]);
     }
 
+    public function recording(Request $request, LegislativeSession $session): Response
+    {
+        $this->authorize('view', $session);
+
+        return Inertia::render('Sessions/Floor/Secretariat', [
+            ...$this->payload($request, $session),
+            'workspace' => 'recording',
+        ]);
+    }
+
     public function updateMinutes(UpdateSecretariatMinutesRequest $request, LegislativeSession $session): RedirectResponse
     {
         $text = trim((string) $request->validated('secretariat_minutes', ''));

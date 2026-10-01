@@ -127,11 +127,10 @@ it('lets the committee chair refer a measure and draft a report from the record'
             'committee_id' => $committee->getKey(),
             'recommendation' => 'approve',
             'findings' => 'The committee recommends approval as proposed.',
-            'report_number' => 'CR-2026-010',
         ])
         ->assertRedirect(route('documents.show', $document));
 
-    $report = CommitteeReport::query()->where('report_number', 'CR-2026-010')->firstOrFail();
+    $report = CommitteeReport::query()->where('committee_referral_id', $referral->getKey())->firstOrFail();
 
     expect($report->status)->toBe('draft')
         ->and($report->subject_document_id)->toBe($document->getKey())
@@ -145,9 +144,7 @@ it('lets the committee chair refer a measure and draft a report from the record'
 
     $this->actingAs($chair)
         ->post(route('reports.submit', $report))
-        ->assertRedirect(route('documents.show', $document));
-
-    expect($report->fresh()->status)->toBe('submitted');
+        ->assertForbidden();
 });
 
 it('lets a committee member send a draft to the chair but not submit it to the body', function (): void {
@@ -184,7 +181,5 @@ it('lets a committee member send a draft to the chair but not submit it to the b
 
     $this->actingAs($chair)
         ->post(route('reports.submit', $report))
-        ->assertRedirect(route('documents.show', $document));
-
-    expect($report->fresh()->status)->toBe('submitted');
+        ->assertForbidden();
 });

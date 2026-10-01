@@ -22,3 +22,15 @@ it('groups ordinance and resolution measures', function (): void {
         ->and(DocumentType::Ordinance->isResolutionMeasure())->toBeFalse()
         ->and(DocumentType::Minutes->isMeasure())->toBeFalse();
 });
+
+it('requires third reading only for ordinance measures', function (): void {
+    expect(DocumentType::ProposedOrdinance->requiresThirdReading())->toBeTrue()
+        ->and(DocumentType::Ordinance->requiresThirdReading())->toBeTrue()
+        ->and(DocumentType::ProposedResolution->requiresThirdReading())->toBeFalse()
+        ->and(DocumentType::Resolution->requiresThirdReading())->toBeFalse()
+        ->and(DocumentType::Minutes->requiresThirdReading())->toBeFalse()
+        ->and(DocumentType::ProposedOrdinance->finalReadingNumber())->toBe(3)
+        ->and(DocumentType::Ordinance->finalReadingNumber())->toBe(3)
+        ->and(DocumentType::ProposedResolution->finalReadingNumber())->toBe(2)
+        ->and(DocumentType::Resolution->finalReadingNumber())->toBe(2);
+});

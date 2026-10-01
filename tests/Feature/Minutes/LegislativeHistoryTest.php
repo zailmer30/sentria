@@ -11,10 +11,13 @@ use App\Models\Document;
 use App\Models\DocumentVersion;
 use App\Models\LegislativeSession;
 use App\Models\Ordinance;
+use App\Models\Resolution;
 use App\Models\User;
 use App\Models\Vote;
 use App\States\Document\Approved;
+use App\States\Document\Archive;
 use App\States\Document\FinalDocument;
+use App\States\Document\Rejected;
 use App\States\Document\SecretariatReview;
 use App\States\Document\Submitted;
 use Database\Seeders\PermissionMatrixSeeder;
@@ -142,6 +145,55 @@ it('renders history for a document slug route', function (): void {
         );
 });
 
+it('returns ordinance and resolution legislative history as json for the register drawer', function (): void {
+    $viewer = historyViewer();
+
+    $ordinanceDocument = Document::factory()->ofType(DocumentType::Ordinance)->create([
+        'status' => Submitted::$name,
+        'submitted_at' => now()->subWeek(),
+        'title' => 'Scholarship ordinance',
+    ]);
+
+    DocumentVersion::factory()->for($ordinanceDocument)->create([
+        'uploaded_by' => $viewer->getKey(),
+    ]);
+
+    $ordinance = Ordinance::factory()->create([
+        'document_id' => $ordinanceDocument->getKey(),
+        'title' => $ordinanceDocument->title,
+    ]);
+
+    test()->actingAs($viewer)
+        ->getJson(route('ordinances.history', $ordinance))
+        ->assertOk()
+        ->assertJsonPath('subject.type', 'ordinance')
+        ->assertJsonPath('subject.title', $ordinance->title)
+        ->assertJsonPath('events.0.stage', 'document')
+        ->assertJsonPath('events.0.label', 'Document Submitted');
+
+    $resolutionDocument = Document::factory()->ofType(DocumentType::Resolution)->create([
+        'status' => Submitted::$name,
+        'submitted_at' => now()->subWeek(),
+        'title' => 'Investment plan resolution',
+    ]);
+
+    DocumentVersion::factory()->for($resolutionDocument)->create([
+        'uploaded_by' => $viewer->getKey(),
+    ]);
+
+    $resolution = Resolution::factory()->create([
+        'document_id' => $resolutionDocument->getKey(),
+        'title' => $resolutionDocument->title,
+    ]);
+
+    test()->actingAs($viewer)
+        ->getJson(route('resolutions.history', $resolution))
+        ->assertOk()
+        ->assertJsonPath('subject.type', 'resolution')
+        ->assertJsonPath('subject.title', $resolution->title)
+        ->assertJsonPath('events.0.stage', 'document');
+});
+
 it('embeds legislative history on the document record', function (): void {
     $viewer = historyViewer();
 
@@ -258,4 +310,133 @@ it('records first, second, and third reading dates on the legislative history', 
         ->label->toBe('Second Reading')
         ->and($events->firstWhere('stage', 'third_reading'))
         ->label->toBe('Third and Final Reading');
+});
+
+it('places approval after third and final reading when the vote closed first', function (): void {
+    $viewer = historyViewer();
+
+    $document = Document::factory()->ofType(DocumentType::ProposedOrdinance)->create([
+        'title' => 'Sample Ordinance',
+        'submitted_at' => now()->subDays(2),
+    ]);
+
+    Document::query()->whereKey($document->getKey())->update([
+        'status' => Approved::$name,
+        'updated_at' => now()->subDay()->setTime(16, 53, 14),
+    ]);
+    $document->refresh();
+
+    $version = DocumentVersion::factory()->for($document)->create([
+        'uploaded_by' => $viewer->getKey(),
+    ]);
+    $version->forceFill(['created_at' => now()->subDays(2)])->saveQuietly();
+
+    $session = LegislativeSession::factory()->adjourned()->create([
+        'title' => '1st Regular Session',
+        'scheduled_start_at' => now()->subDay(),
+    ]);
+
+    AgendaItem::factory()->create([
+        'session_id' => $session->getKey(),
+        'document_id' => $document->getKey(),
+        'title' => $document->title,
+        'category' => 'third-reading',
+        'reading_number' => 3,
+        'status' => 'completed',
+        'started_at' => now()->subDay()->setTime(16, 53, 4),
+        'completed_at' => now()->subDay()->setTime(16, 53, 16),
+        'voting_closed_at' => now()->subDay()->setTime(16, 53, 14),
+    ]);
+
+    $response = test()->actingAs($viewer)
+        ->get(route('documents.history', $document))
+        ->assertOk();
+
+    $events = collect($response->original->getData()['page']['props']['events'] ?? []);
+    $readingAt = $events->search(fn (array $event): bool => $event['stage'] === 'third_reading');
+    $approvalAt = $events->search(fn (array $event): bool => $event['stage'] === 'approval');
+
+    expect($events->last()['stage'])->toBe('approval')
+        ->and($readingAt)->toBeInt()
+        ->and($approvalAt)->toBeGreaterThan($readingAt);
+});
+
+it('keeps a rejection on the legislative history after the measure is archived', function (): void {
+    $viewer = historyViewer();
+
+    $document = Document::factory()->ofType(DocumentType::Ordinance)->create([
+        'title' => 'An ordinance rejected on third reading',
+        'submitted_at' => now()->subDays(3),
+    ]);
+
+    DocumentVersion::factory()->for($document)->create([
+        'uploaded_by' => $viewer->getKey(),
+    ]);
+
+    $session = LegislativeSession::factory()->adjourned()->create([
+        'title' => '1st Regular Session',
+        'scheduled_start_at' => now()->subDay(),
+    ]);
+
+    AgendaItem::factory()->create([
+        'session_id' => $session->getKey(),
+        'document_id' => $document->getKey(),
+        'title' => $document->title,
+        'category' => 'third-reading',
+        'reading_number' => 3,
+        'started_at' => now()->subDay()->setTime(14, 0),
+        'completed_at' => now()->subDay()->setTime(14, 30),
+    ]);
+
+    config(['audit.console' => true]);
+
+    $document->forceFill(['status' => Rejected::$name])->save();
+    $document->forceFill([
+        'status' => Archive::$name,
+        'archived_at' => now()->subDay()->setTime(16, 0),
+    ])->save();
+
+    $response = test()->actingAs($viewer)
+        ->get(route('documents.history', $document))
+        ->assertOk();
+
+    $events = collect($response->original->getData()['page']['props']['events'] ?? []);
+    $rejectedAt = $events->search(fn (array $event): bool => $event['stage'] === 'rejected');
+    $archiveAt = $events->search(fn (array $event): bool => $event['stage'] === 'archive');
+    $readingAt = $events->search(fn (array $event): bool => $event['stage'] === 'third_reading');
+
+    expect($events->firstWhere('stage', 'rejected'))
+        ->label->toBe('Rejected')
+        ->and($events->firstWhere('stage', 'archive'))
+        ->label->toBe('Archive')
+        ->and($readingAt)->toBeInt()
+        ->and($rejectedAt)->toBeGreaterThan($readingAt)
+        ->and($archiveAt)->toBeGreaterThan($rejectedAt);
+});
+
+it('records archive without a rejection when the measure was not rejected', function (): void {
+    $viewer = historyViewer();
+
+    $document = Document::factory()->ofType(DocumentType::Ordinance)->create([
+        'title' => 'An ordinance sent to the archive',
+        'submitted_at' => now()->subWeek(),
+    ]);
+
+    DocumentVersion::factory()->for($document)->create([
+        'uploaded_by' => $viewer->getKey(),
+    ]);
+
+    $document->forceFill([
+        'status' => Archive::$name,
+        'archived_at' => now()->subDay(),
+    ])->save();
+
+    $response = test()->actingAs($viewer)
+        ->get(route('documents.history', $document))
+        ->assertOk();
+
+    $stages = collect($response->original->getData()['page']['props']['events'] ?? [])->pluck('stage');
+
+    expect($stages)->toContain('archive')
+        ->and($stages)->not->toContain('rejected');
 });

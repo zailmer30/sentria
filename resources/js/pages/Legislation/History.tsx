@@ -10,7 +10,7 @@ import { Link } from '@inertiajs/react';
 import { History } from 'lucide-react';
 
 type Subject = {
-    type: 'ordinance' | 'document';
+    type: 'ordinance' | 'resolution' | 'document';
     id: string;
     title: string;
     number: string;
@@ -30,9 +30,11 @@ export default function LegislativeHistory({ subject, events }: Props) {
     const backHref =
         subject.type === 'ordinance'
             ? `/ordinances/${subject.id}`
-            : subject.document_slug
-              ? `/documents/${subject.document_slug}`
-              : '/documents';
+            : subject.type === 'resolution'
+              ? `/resolutions/${subject.id}`
+              : subject.document_slug
+                ? `/documents/${subject.document_slug}`
+                : '/documents';
 
     return (
         <AppLayout title={t('legislation.history_title')}>

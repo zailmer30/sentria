@@ -3,9 +3,11 @@
 use App\Contracts\AI\TranscriptionService;
 use App\DTO\AI\TranscriptionResult;
 use App\Enums\UserRole;
+use App\Events\TranscriptSegmentReceived;
 use App\Models\AgendaItem;
 use App\Models\LegislativeSession;
 use App\Models\Transcript;
+use App\Models\TranscriptSegmentEdit;
 use App\Models\User;
 use App\Services\Sessions\TranscriptService;
 use App\States\Session\InSession;
@@ -13,6 +15,7 @@ use Database\Seeders\PermissionMatrixSeeder;
 use Database\Seeders\RolePermissionSeeder;
 use Database\Seeders\SystemSettingSeeder;
 use Illuminate\Http\UploadedFile;
+use Illuminate\Support\Facades\Event;
 use Illuminate\Support\Facades\Hash;
 use Illuminate\Support\Facades\Storage;
 use Inertia\Testing\AssertableInertia as Assert;
@@ -85,8 +88,10 @@ it('processes uploaded audio into a searchable transcript with agenda associatio
         ->and($transcript->full_text)->not->toBeEmpty();
 
     $firstSegment = $transcript->segments[0];
-    expect($firstSegment)->toHaveKeys(['index', 'start', 'end', 'text', 'speaker'])
-        ->and($firstSegment['text'])->toContain('Budget Appropriations Ordinance');
+    expect($firstSegment)->toHaveKeys(['index', 'start', 'end', 'text', 'speaker', 'original_text', 'original_speaker'])
+        ->and($firstSegment['text'])->toContain('Budget Appropriations Ordinance')
+        ->and($firstSegment['original_text'])->toBe($firstSegment['text'])
+        ->and($firstSegment['original_speaker'])->toBe($firstSegment['speaker']);
 
     /** @var TranscriptService $service */
     $service = app(TranscriptService::class);
@@ -149,7 +154,9 @@ it('transcribes an upload onto the live chamber transcript so the page can show 
     expect($chamber->source)->toBe('chamber_channels')
         ->and($chamber->status)->toBe('completed')
         ->and($chamber->full_text)->not->toBeEmpty()
-        ->and($chamber->full_text)->not->toBe('Live line');
+        ->and($chamber->full_text)->not->toBe('Live line')
+        ->and($chamber->segments[0]['original_text'])->toBe($chamber->segments[0]['text'])
+        ->and($chamber->segmentEdits()->count())->toBe(0);
 });
 
 it('surfaces a transcription failure on the transcript page', function (): void {
@@ -202,4 +209,91 @@ it('shares the low-confidence threshold with the transcript page', function (): 
             ->component('Sessions/Transcript')
             ->where('ai.transcription_low_confidence', 0.4)
         );
+});
+
+it('replaces machine originals and discards prior edits on a new upload', function (): void {
+    ['secretariat' => $secretariat, 'session' => $session] = transcriptSessionWithAgenda();
+
+    $transcript = Transcript::factory()->create([
+        'session_id' => $session->getKey(),
+        'source' => 'live_stt',
+        'status' => 'completed',
+        'full_text' => 'Old machine line.',
+        'segments' => [
+            [
+                'index' => 0,
+                'start' => 0.0,
+                'end' => 1.0,
+                'text' => 'Edited official line.',
+                'original_text' => 'Old machine line.',
+                'speaker' => 'Speaker 1',
+                'original_speaker' => 'Speaker 1',
+                'original_speaker_id' => null,
+                'original_attributed' => true,
+            ],
+        ],
+    ]);
+
+    TranscriptSegmentEdit::query()->create([
+        'transcript_id' => $transcript->getKey(),
+        'segment_index' => 0,
+        'field' => 'text',
+        'old_value' => 'Old machine line.',
+        'new_value' => 'Edited official line.',
+        'user_id' => $secretariat->getKey(),
+        'created_at' => now(),
+    ]);
+
+    $this->actingAs($secretariat)
+        ->post(route('sessions.transcript.store', $session), [
+            'audio' => UploadedFile::fake()->createWithContent('session.wav', 'fake-session-audio-for-transcription-test'),
+        ])
+        ->assertRedirect(route('sessions.transcript.show', $session));
+
+    $transcript->refresh();
+
+    expect($transcript->segmentEdits()->count())->toBe(0)
+        ->and($transcript->segments[0]['original_text'])->toBe($transcript->segments[0]['text'])
+        ->and($transcript->segments[0]['text'])->not->toBe('Edited official line.');
+});
+
+it('stamps original STT fields on live segments without broadcasting them', function (): void {
+    $session = LegislativeSession::factory()->create([
+        'status' => InSession::$name,
+    ]);
+    $transcript = Transcript::factory()->create([
+        'session_id' => $session->getKey(),
+        'source' => 'chamber_channels',
+        'status' => 'processing',
+        'segments' => [],
+        'full_text' => '',
+    ]);
+
+    Event::fake([TranscriptSegmentReceived::class]);
+
+    /** @var TranscriptService $service */
+    $service = app(TranscriptService::class);
+    $service->appendLiveSegment($transcript, [
+        'index' => 42,
+        'start' => 1.0,
+        'end' => 2.5,
+        'text' => 'Hello from the floor.',
+        'speaker' => 'Hon. Member One',
+        'speaker_id' => $transcript->created_by,
+        'attributed' => true,
+        'confidence' => 0.91,
+    ]);
+
+    $fresh = $transcript->fresh();
+    $stored = $fresh->segments[0];
+
+    expect($stored['text'])->toBe('Hello from the floor.')
+        ->and($stored['original_text'])->toBe('Hello from the floor.')
+        ->and($stored['original_speaker'])->toBe('Hon. Member One')
+        ->and($stored['original_attributed'])->toBeTrue();
+
+    Event::assertDispatched(TranscriptSegmentReceived::class, function (TranscriptSegmentReceived $event): bool {
+        return $event->segment['text'] === 'Hello from the floor.'
+            && ! array_key_exists('original_text', $event->segment);
+    });
 });

@@ -136,6 +136,55 @@ it('lets the secretariat return to the previous item after an accidental advance
         ->and($second->fresh()->started_at)->toBeNull();
 });
 
+it('returns to the immediately previous heading, not the first completed item', function (): void {
+    $secretariat = authActor(UserRole::Secretariat);
+    $session = LegislativeSession::factory()->inSession()->create();
+    $callToOrder = AgendaItem::factory()->procedural('call-to-order', 'Call to Order', 1)->create([
+        'session_id' => $session->getKey(),
+        'status' => 'completed',
+        'started_at' => now()->subMinutes(20),
+        'completed_at' => now()->subMinutes(18),
+    ]);
+    AgendaItem::factory()->procedural('roll-call', 'Roll Call', 2)->create([
+        'session_id' => $session->getKey(),
+        'status' => 'completed',
+        'started_at' => now()->subMinutes(17),
+        'completed_at' => now()->subMinutes(15),
+    ]);
+    $minutes = AgendaItem::factory()->procedural('approval-minutes', 'Reading and Consideration of the Minutes', 3)->create([
+        'session_id' => $session->getKey(),
+        'status' => 'completed',
+        'started_at' => now()->subMinutes(14),
+        'completed_at' => now()->subMinutes(2),
+    ]);
+    $privilegeHour = AgendaItem::factory()->procedural('privilege-hour', 'Privilege Hour', 4)->create([
+        'session_id' => $session->getKey(),
+        'status' => 'in-progress',
+        'started_at' => now(),
+    ]);
+
+    $this->actingAs($secretariat)
+        ->from(route('sessions.floor.secretariat', $session))
+        ->get(route('sessions.floor.secretariat', $session))
+        ->assertOk()
+        ->assertInertia(fn (Assert $page) => $page
+            ->component('Sessions/Floor/Secretariat')
+            ->where('previous_item.id', $minutes->getKey())
+            ->where('current_item.id', $privilegeHour->getKey()));
+
+    $this->actingAs($secretariat)
+        ->from(route('sessions.floor.secretariat', $session))
+        ->post(route('sessions.agenda.retreat', $session))
+        ->assertRedirect(route('sessions.floor.secretariat', $session))
+        ->assertSessionHas('success', 'sessions.agenda_retreated');
+
+    expect($minutes->fresh()->status)->toBe('in-progress')
+        ->and($minutes->fresh()->completed_at)->toBeNull()
+        ->and($privilegeHour->fresh()->status)->toBe('pending')
+        ->and($privilegeHour->fresh()->started_at)->toBeNull()
+        ->and($callToOrder->fresh()->status)->toBe('completed');
+});
+
 it('forbids board members from retreating the agenda', function (): void {
     $member = authActor(UserRole::BoardMember);
     $session = LegislativeSession::factory()->inSession()->create();
@@ -228,7 +277,7 @@ it('exposes the previous item on the secretariat console', function (): void {
         'status' => 'in-progress',
         'started_at' => now(),
     ]);
-    $next = AgendaItem::factory()->procedural('opening-prayer', 'Opening Prayer', 3)->create([
+    $next = AgendaItem::factory()->procedural('convocation', 'Invocation', 3)->create([
         'session_id' => $session->getKey(),
         'status' => 'pending',
     ]);

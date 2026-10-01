@@ -4,6 +4,7 @@ namespace App\Models;
 
 use App\Enums\Confidentiality;
 use App\Enums\DocumentType;
+use App\Enums\SessionType;
 use App\States\Document\DocumentWorkflowStatus;
 use Database\Factories\DocumentFactory;
 use Illuminate\Database\Eloquent\Attributes\UseFactory;
@@ -29,6 +30,7 @@ use Spatie\ModelStates\HasStates;
  * @property DocumentWorkflowStatus $status
  * @property Confidentiality $confidentiality
  * @property string|null $enacting_clause
+ * @property string|null $external_author
  * @property int|null $proposed_effectivity
  * @property string|null $explanatory_note
  * @property int|null $current_reading
@@ -103,6 +105,21 @@ class Document extends Model implements Auditable
     public function author(): BelongsTo
     {
         return $this->belongsTo(User::class, 'author_id');
+    }
+
+    /**
+     * Name printed as the author. A name entered at filing takes precedence
+     * over the account that submitted the record.
+     */
+    public function authorName(): ?string
+    {
+        $named = trim((string) ($this->external_author ?? ''));
+
+        if ($named !== '') {
+            return $named;
+        }
+
+        return $this->relationLoaded('author') ? $this->author?->display_name : null;
     }
 
     /** @return BelongsTo<User, $this> */
@@ -187,6 +204,29 @@ class Document extends Model implements Auditable
     public function agendaItems(): HasMany
     {
         return $this->hasMany(AgendaItem::class);
+    }
+
+    /**
+     * True while this filing is on a sitting's order of business. Floor and
+     * calendar actions then own the next workflow hop.
+     */
+    public function isPlacedInSession(): bool
+    {
+        return $this->agendaItems()
+            ->whereIn('status', ['pending', 'in-progress', 'considered', 'postponed'])
+            ->exists();
+    }
+
+    /**
+     * The committee already took this measure up in a finished hearing.
+     * Sending it to committee review again would repeat that step.
+     */
+    public function wasHeardInCommittee(): bool
+    {
+        return $this->agendaItems()
+            ->where('status', 'completed')
+            ->whereHas('session', fn (Builder $query) => $query->where('type', SessionType::CommitteeHearing->value))
+            ->exists();
     }
 
     /** @return HasOne<Ordinance, $this> */

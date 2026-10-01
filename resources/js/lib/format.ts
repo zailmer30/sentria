@@ -92,6 +92,20 @@ export function useFormatters() {
             },
             formatNumber: (value: number | null | undefined): string =>
                 typeof value === 'number' ? number.format(value) : EMPTY_VALUE,
+            /** Committee on Health and Committee on Finance */
+            formatList: (values: string[]): string => {
+                const names = values.map((value) => value.trim()).filter(Boolean);
+
+                if (names.length === 0) {
+                    return EMPTY_VALUE;
+                }
+
+                if (names.length === 1) {
+                    return names[0];
+                }
+
+                return new Intl.ListFormat(tag, { style: 'long', type: 'conjunction' }).format(names);
+            },
             /** 12 minutes ago — falls back to a short date past a week. */
             formatRelative: (value: string | null | undefined): string => {
                 const parsed = toDate(value);

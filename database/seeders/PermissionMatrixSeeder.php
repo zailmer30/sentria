@@ -113,9 +113,9 @@ class PermissionMatrixSeeder extends Seeder
                 'viewAny' => 'List committee reports.',
                 'view' => 'View a committee report.',
                 'create' => 'Draft a committee report.',
-                'submitForReview' => 'Send a draft committee report to the chair for checking.',
-                'submit' => 'Submit a chair-checked committee report to the body.',
-                'adopt' => 'Record adoption of a committee report.',
+                'submitForReview' => 'Send a draft committee report for checking.',
+                'submit' => 'File a committee report on the document page for Committee Hour.',
+                'adopt' => 'Record the chair motion to adopt a committee report on the floor.',
             ],
             'attendance' => [
                 'viewAny' => 'View session attendance.',
@@ -165,6 +165,9 @@ class PermissionMatrixSeeder extends Seeder
             ],
             'notifications' => [
                 'viewAny' => 'View one\'s own notifications.',
+            ],
+            'session-chat' => [
+                'use' => 'Use private in-session floor chat.',
             ],
             'audit' => [
                 'viewAny' => 'Read the audit trail.',
@@ -217,6 +220,7 @@ class PermissionMatrixSeeder extends Seeder
             'documents.create', 'documents.uploadVersion',
             'motions.create', 'motions.second', 'motions.withdraw',
             'voting.cast',
+            'session-chat.use',
         ];
 
         return [
@@ -235,8 +239,9 @@ class PermissionMatrixSeeder extends Seeder
                 'legislation.manage',
                 'committees.manage', 'committees.manageMembers',
                 'referrals.manage',
-                'reports.create', 'reports.submitForReview', 'reports.adopt',
+                'reports.create', 'reports.submitForReview', 'reports.submit', 'reports.adopt',
                 'attendance.record',
+                'session-chat.use',
                 'voting.open', 'voting.close', 'voting.recordManual',
                 'minutes.generateDraft', 'minutes.edit', 'minutes.review',
                 'transcripts.manage',
@@ -260,7 +265,7 @@ class PermissionMatrixSeeder extends Seeder
                 ...$seatedMember,
                 'committees.manageMembers',
                 'referrals.manage',
-                'reports.create', 'reports.submitForReview', 'reports.submit', 'reports.adopt',
+                'reports.create', 'reports.submitForReview', 'reports.adopt',
                 'documents.refer',
             ],
 

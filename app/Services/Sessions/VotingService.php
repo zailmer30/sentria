@@ -228,13 +228,14 @@ class VotingService
         $this->hall->clearPinnedResults($session);
 
         $this->promotePassedSecondReading($session, $agendaItem, $actor);
+        $this->applySecondReadingOutcome($session, $agendaItem, $actor, $tallies);
         $this->applyThirdReadingOutcome($session, $agendaItem, $actor, $tallies);
 
         return $tallies;
     }
 
     /**
-     * Bring an IRP record in line with a third-reading vote that already closed.
+     * Bring an IRP record in line with a final-reading vote that already closed.
      */
     public function syncCompletedThirdReading(Document $document, User $actor): Document
     {
@@ -242,35 +243,23 @@ class VotingService
             return $document;
         }
 
-        $item = AgendaItem::query()
-            ->with('session')
-            ->where('document_id', $document->getKey())
-            ->whereNotNull('voting_closed_at')
-            ->where(function ($query): void {
-                $query->where('reading_number', 3)
-                    ->orWhere('category', 'third-reading');
-            })
-            ->orderByDesc('voting_closed_at')
-            ->first();
+        $thirdItem = $this->latestClosedReadingItem($document, thirdReading: true);
 
-        if (! $item instanceof AgendaItem || (int) $item->voting_round < 1) {
+        if ($thirdItem instanceof AgendaItem) {
+            return $this->syncClosedItem($document, $thirdItem, $actor, thirdReading: true);
+        }
+
+        if ($document->document_type->requiresThirdReading()) {
             return $document;
         }
 
-        $session = $item->session;
+        $secondItem = $this->latestClosedReadingItem($document, thirdReading: false);
 
-        if (! $session instanceof LegislativeSession) {
+        if (! $secondItem instanceof AgendaItem) {
             return $document;
         }
 
-        $this->applyThirdReadingOutcome(
-            $session,
-            $item,
-            $actor,
-            $this->tallies($session, $item, (int) $item->voting_round),
-        );
-
-        return $document->fresh() ?? $document;
+        return $this->syncClosedItem($document, $secondItem, $actor, thirdReading: false);
     }
 
     private function promotePassedSecondReading(LegislativeSession $session, AgendaItem $agendaItem, User $actor): void
@@ -279,7 +268,43 @@ class VotingService
             return;
         }
 
+        $agendaItem->loadMissing('document');
+        $document = $agendaItem->document;
+
+        if (! $document instanceof Document || ! $document->document_type->requiresThirdReading()) {
+            return;
+        }
+
         app(CalendarRoutingService::class)->placePassedSecondReadingOnThird($session, $agendaItem, $actor);
+    }
+
+    /**
+     * @param  array{yes: int, no: int, abstain: int, inhibit: int, total: int}  $tallies
+     */
+    private function applySecondReadingOutcome(
+        LegislativeSession $session,
+        AgendaItem $agendaItem,
+        User $actor,
+        array $tallies,
+    ): void {
+        $agenda = app(AgendaService::class);
+
+        if (! $agenda->isSecondReadingMeasure($agendaItem)) {
+            return;
+        }
+
+        $agendaItem->loadMissing('document');
+        $document = $agendaItem->document;
+
+        if (! $document instanceof Document || $document->document_type->requiresThirdReading()) {
+            return;
+        }
+
+        if ($this->documentHasThirdReadingItem($document)) {
+            return;
+        }
+
+        $this->applyVoteOutcome($session, $agendaItem, $actor, $tallies);
     }
 
     /**
@@ -291,12 +316,22 @@ class VotingService
         User $actor,
         array $tallies,
     ): void {
-        $agenda = app(AgendaService::class);
-
-        if (! $agenda->isThirdReadingMeasure($agendaItem)) {
+        if (! app(AgendaService::class)->isThirdReadingMeasure($agendaItem)) {
             return;
         }
 
+        $this->applyVoteOutcome($session, $agendaItem, $actor, $tallies);
+    }
+
+    /**
+     * @param  array{yes: int, no: int, abstain: int, inhibit: int, total: int}  $tallies
+     */
+    private function applyVoteOutcome(
+        LegislativeSession $session,
+        AgendaItem $agendaItem,
+        User $actor,
+        array $tallies,
+    ): void {
         if (($tallies['yes'] + $tallies['no']) < 1) {
             return;
         }
@@ -326,6 +361,64 @@ class VotingService
         } catch (AuthorizationException|InvalidArgumentException|TransitionNotFound) {
             return;
         }
+    }
+
+    private function syncClosedItem(
+        Document $document,
+        AgendaItem $item,
+        User $actor,
+        bool $thirdReading,
+    ): Document {
+        if ((int) $item->voting_round < 1) {
+            return $document;
+        }
+
+        $session = $item->session;
+
+        if (! $session instanceof LegislativeSession) {
+            return $document;
+        }
+
+        $tallies = $this->tallies($session, $item, (int) $item->voting_round);
+
+        if ($thirdReading) {
+            $this->applyThirdReadingOutcome($session, $item, $actor, $tallies);
+        } else {
+            $this->applySecondReadingOutcome($session, $item, $actor, $tallies);
+        }
+
+        return $document->fresh() ?? $document;
+    }
+
+    private function latestClosedReadingItem(Document $document, bool $thirdReading): ?AgendaItem
+    {
+        return AgendaItem::query()
+            ->with('session')
+            ->where('document_id', $document->getKey())
+            ->whereNotNull('voting_closed_at')
+            ->where(function ($query) use ($thirdReading): void {
+                if ($thirdReading) {
+                    $query->where('reading_number', 3)
+                        ->orWhere('category', 'third-reading');
+
+                    return;
+                }
+
+                $query->where('reading_number', 2);
+            })
+            ->orderByDesc('voting_closed_at')
+            ->first();
+    }
+
+    private function documentHasThirdReadingItem(Document $document): bool
+    {
+        return AgendaItem::query()
+            ->where('document_id', $document->getKey())
+            ->where(function ($query): void {
+                $query->where('reading_number', 3)
+                    ->orWhere('category', 'third-reading');
+            })
+            ->exists();
     }
 
     /**

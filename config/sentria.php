@@ -20,6 +20,26 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Branding
+    |--------------------------------------------------------------------------
+    |
+    | One accent colour for staff chrome and one deep plate colour for hero
+    | cards, the chamber floor, the portal plate, and sign-in. Live/red, fonts,
+    | and layout stay authored. Env is the fallback until an administrator
+    | saves the brand kit.
+    |
+    */
+
+    'branding' => [
+        'accent' => env('SENTRIA_ACCENT', '#0038A8'),
+        'plate' => env('SENTRIA_PLATE', '#132042'),
+        'plate_pattern' => env('SENTRIA_PLATE_PATTERN', 'authored'),
+        'logo_max_kilobytes' => (int) env('SENTRIA_BRAND_LOGO_MAX_KB', 2048),
+        'logo_mimes' => ['jpeg', 'jpg', 'png', 'webp'],
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
     | Vite (local+debug only)
     |--------------------------------------------------------------------------
     |

@@ -18,6 +18,7 @@ use App\Models\User;
 use App\Notifications\DocumentSubmitted;
 use App\Services\AI\LegislativeDocumentSummarizer;
 use App\Services\Audit\AuditLogger;
+use App\Services\Committees\CommitteeReportNumberAllocator;
 use App\Services\Documents\DocumentAccessService;
 use App\Services\Documents\DocumentReferenceAllocator;
 use App\Services\Documents\DocumentVersionService;
@@ -221,8 +222,8 @@ class DocumentController extends Controller
                 'document_type' => $validated['document_type'],
                 'confidentiality' => $validated['confidentiality'] ?? Confidentiality::Internal->value,
                 'abstract' => $validated['abstract'] ?? null,
+                'external_author' => $validated['external_author'],
                 'enacting_clause' => $validated['enacting_clause'] ?? null,
-                'proposed_effectivity' => $validated['proposed_effectivity'] ?? null,
                 'explanatory_note' => $validated['explanatory_note'] ?? null,
                 'committee_id' => $validated['committee_id'] ?? null,
                 'session_id' => $validated['session_id'] ?? null,
@@ -244,7 +245,7 @@ class DocumentController extends Controller
             ->with('success', 'documents.created');
     }
 
-    public function show(Document $document): Response
+    public function show(Document $document, CommitteeReportNumberAllocator $reportNumbers): Response
     {
         $this->authorize('view', $document);
 
@@ -300,16 +301,35 @@ class DocumentController extends Controller
                 'createPublication' => $user->can('publications.review')
                     && ! $document->document_type->isMeasure(),
                 'createReport' => $user->can('create', CommitteeReport::class),
+                'submitReport' => $user->can('reports.submit'),
+                'editReferral' => $user->can('documents.refer')
+                    && ($document->status instanceof CommitteeReferralState
+                        || $document->status instanceof CommitteeReview)
+                    && $document->referrals->contains(
+                        fn ($referral): bool => in_array($referral->status, ['pending', 'in-review'], true)
+                    ),
                 'seal' => $user->can('legislation.manage')
                     && $document->sealed_at === null
                     && in_array($document->status->getValue(), ['approved', 'transmittal'], true),
             ],
+            'nextReportNumber' => $user->can('create', CommitteeReport::class)
+                ? $reportNumbers->preview()
+                : null,
             'aiSummary' => $storedSummary?->toMetadataJson(),
             'committees' => Committee::query()
                 ->where(function (Builder $query) use ($document): void {
                     $query->where('is_active', true);
 
-                    if ($document->committee_id !== null) {
+                    $referredIds = $document->referrals
+                        ->whereNull('completed_at')
+                        ->pluck('committee_id')
+                        ->filter()
+                        ->unique()
+                        ->all();
+
+                    if ($referredIds !== []) {
+                        $query->orWhereIn('id', $referredIds);
+                    } elseif ($document->committee_id !== null) {
                         $query->orWhere('id', $document->committee_id);
                     }
                 })

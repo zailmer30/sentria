@@ -47,6 +47,11 @@ class AgendaItemPolicy
         return $user->can('agenda.manage');
     }
 
+    public function beginHeadingVotes(User $user, AgendaItem $item): bool
+    {
+        return $user->can('agenda.manage');
+    }
+
     public function calendarSecondReading(User $user, AgendaItem $item): bool
     {
         return $user->can('agenda.manage');

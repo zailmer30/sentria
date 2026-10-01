@@ -27,6 +27,7 @@ class CommitteeReferralFactory extends Factory
             'status' => 'pending',
             'is_primary' => true,
             'instructions' => 'Review, conduct public consultation as needed, and report back to the body.',
+            'hearing_waived' => false,
             'referred_at' => $referredAt,
             'due_at' => (clone $referredAt)->modify('+30 days'),
         ];

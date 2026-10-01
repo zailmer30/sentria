@@ -34,19 +34,26 @@ class AttendanceService
     ): SessionAttendance {
         $status = AttendanceStatus::from($data['status']);
 
+        $values = [
+            'status' => $status->value,
+            'checked_in_at' => $status->countsTowardQuorum() ? now() : null,
+            'checked_out_at' => $status->countsTowardQuorum() ? null : now(),
+            'check_in_method' => $status->countsTowardQuorum() ? 'manual' : null,
+            'recorded_by' => $recorder->getKey(),
+        ];
+
+        if (! $status->takesRemarks()) {
+            $values['remarks'] = null;
+        } elseif (array_key_exists('remarks', $data)) {
+            $values['remarks'] = self::normalizeRemarks($data['remarks'] ?? null);
+        }
+
         return SessionAttendance::query()->updateOrCreate(
             [
                 'session_id' => $session->getKey(),
                 'user_id' => $member->getKey(),
             ],
-            [
-                'status' => $status->value,
-                'checked_in_at' => $status->countsTowardQuorum() ? now() : null,
-                'checked_out_at' => $status->countsTowardQuorum() ? null : now(),
-                'check_in_method' => $status->countsTowardQuorum() ? 'manual' : null,
-                'remarks' => $data['remarks'] ?? null,
-                'recorded_by' => $recorder->getKey(),
-            ],
+            $values,
         );
     }
 
@@ -111,9 +118,17 @@ class AttendanceService
                 'checked_out_at' => null,
                 'check_in_method' => 'tablet',
                 'recorded_by' => $member->getKey(),
+                'remarks' => null,
             ],
         );
 
         return true;
+    }
+
+    private static function normalizeRemarks(?string $remarks): ?string
+    {
+        $trimmed = preg_replace('/\s+/u', ' ', trim((string) $remarks)) ?? '';
+
+        return $trimmed === '' ? null : $trimmed;
     }
 }

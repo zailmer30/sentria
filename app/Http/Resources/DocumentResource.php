@@ -12,8 +12,9 @@ use App\Models\Ordinance;
 use App\Models\Resolution;
 use App\Models\User;
 use App\Services\Documents\DocumentAccessService;
-use App\States\Document\AgendaInclusion;
+use App\States\Document\Archive;
 use App\States\Document\CommitteeReport as CommitteeReportState;
+use App\States\Document\CommitteeReview;
 use App\States\Document\DocumentWorkflowStatus;
 use App\States\Document\ReadingDeliberation;
 use App\States\Document\ReturnedForRevision;
@@ -30,7 +31,6 @@ class DocumentResource
         $currentVersion = $document->relationLoaded('currentVersion')
             ? $document->currentVersion
             : null;
-        $author = $document->relationLoaded('author') ? $document->author : null;
         $committee = $document->relationLoaded('committee') ? $document->committee : null;
 
         return [
@@ -47,7 +47,7 @@ class DocumentResource
             'processing_status' => $currentVersion?->processing_status?->value,
             'processing_status_label' => $currentVersion?->processing_status?->label(),
             'submitted_at' => $document->submitted_at?->toIso8601String(),
-            'author' => $author?->display_name,
+            'author' => $document->authorName(),
             'committee' => $committee?->name,
             'archived_at' => $document->archived_at?->toIso8601String(),
             'deleted_at' => $document->deleted_at?->toIso8601String(),
@@ -64,8 +64,8 @@ class DocumentResource
         return [
             ...self::summary($document),
             'abstract' => $document->abstract,
+            'external_author' => $document->external_author,
             'enacting_clause' => $document->enacting_clause,
-            'proposed_effectivity' => $document->proposed_effectivity ?: null,
             'explanatory_note' => $document->explanatory_note,
             'current_reading' => $document->current_reading,
             'tracking_number' => $document->tracking_number,
@@ -79,6 +79,7 @@ class DocumentResource
             'is_measure' => $document->document_type->isMeasure(),
             'return_reason' => $document->return_reason,
             'returned_at' => $document->returned_at?->toIso8601String(),
+            'on_session' => $document->isPlacedInSession(),
             'versions' => $document->versions->map(fn (DocumentVersion $v): array => self::version($v))->values()->all(),
             'grants' => $document->grants->map(fn (DocumentGrant $g): array => self::grant($g))->values()->all(),
             'transitions' => $user === null ? [] : self::availableTransitions($document, $user),
@@ -103,21 +104,28 @@ class DocumentResource
 
         $access = app(DocumentAccessService::class);
         $transitions = [];
+        $placedInSession = $document->isPlacedInSession();
 
         foreach ($status->successors() as $class) {
             // Committee report status advances when a report is submitted or
             // adopted — not via a bare status button on the measure.
-            if ($class === CommitteeReportState::class) {
+            if ($class === CommitteeReportState::class || ($class === Archive::class && $status instanceof CommitteeReportState)) {
                 continue;
             }
 
-            // Opening a reading belongs on the floor after the measure is
-            // attached to a sitting. Until then it waits in the agenda pool.
-            if (
-                $class === ReadingDeliberation::class
-                && $status instanceof AgendaInclusion
-                && ! $document->agendaItems()->exists()
-            ) {
+            // A finished committee hearing already did this step.
+            if ($class === CommitteeReview::class && $document->wasHeardInCommittee()) {
+                continue;
+            }
+
+            // Opening a reading belongs on the floor. Before the measure is
+            // attached it waits in the agenda pool; after it is attached the
+            // presiding officer opens the reading from the sitting.
+            if ($class === ReadingDeliberation::class) {
+                continue;
+            }
+
+            if ($placedInSession && DocumentWorkflowStatus::isSessionOwnedHop($class, $status::class)) {
                 continue;
             }
 
@@ -146,7 +154,16 @@ class DocumentResource
     }
 
     /**
-     * @return array{id: string, committee_id: string, committee: string|null, status: string}|null
+     * @return array{
+     *     id: string,
+     *     committee_id: string,
+     *     committee: string|null,
+     *     committee_ids: list<string>,
+     *     committees: list<string>,
+     *     status: string,
+     *     meeting_on: string|null,
+     *     remarks: string|null
+     * }|null
      */
     public static function openReferral(Document $document): ?array
     {
@@ -154,10 +171,12 @@ class DocumentResource
             return null;
         }
 
-        $referral = $document->referrals
+        $open = $document->referrals
             ->filter(fn (CommitteeReferral $item): bool => in_array($item->status, ['pending', 'in-review'], true))
-            ->sortByDesc(fn (CommitteeReferral $item): int => $item->referred_at?->getTimestamp() ?? 0)
-            ->first();
+            ->sortBy(fn (CommitteeReferral $item): int => $item->is_primary ? 0 : 1)
+            ->values();
+
+        $referral = $open->first();
 
         if (! $referral instanceof CommitteeReferral) {
             return null;
@@ -167,7 +186,20 @@ class DocumentResource
             'id' => $referral->getKey(),
             'committee_id' => $referral->committee_id,
             'committee' => $referral->committee?->name,
+            'committee_ids' => $open
+                ->map(fn (CommitteeReferral $item): string => (string) $item->committee_id)
+                ->unique()
+                ->values()
+                ->all(),
+            'committees' => $open
+                ->map(fn (CommitteeReferral $item): ?string => $item->committee?->name)
+                ->filter()
+                ->unique()
+                ->values()
+                ->all(),
             'status' => $referral->status,
+            'meeting_on' => $referral->meeting_on?->toDateString(),
+            'remarks' => $referral->instructions,
         ];
     }
 
@@ -285,6 +317,7 @@ class DocumentResource
             'is_primary' => $referral->is_primary,
             'referred_at' => $referral->referred_at?->toIso8601String(),
             'due_at' => $referral->due_at?->toIso8601String(),
+            'meeting_on' => $referral->meeting_on?->toDateString(),
             'completed_at' => $referral->completed_at?->toIso8601String(),
             'document' => $referral->document ? self::summary($referral->document) : null,
             'referrer' => $referral->referrer?->display_name,
@@ -317,6 +350,19 @@ class DocumentResource
         }
 
         return [
+            ...self::floorReport($report),
+            'can' => $can,
+        ];
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    public static function floorReport(CommitteeReport $report): array
+    {
+        $report->loadMissing('submitter');
+
+        return [
             'id' => $report->getKey(),
             'report_number' => $report->report_number,
             'recommendation' => $report->recommendation,
@@ -325,7 +371,6 @@ class DocumentResource
             'recommendation_notes' => $report->recommendation_notes,
             'submitted_at' => $report->submitted_at?->toIso8601String(),
             'submitter' => $report->submitter?->display_name,
-            'can' => $can,
         ];
     }
 
@@ -344,15 +389,7 @@ class DocumentResource
             'status' => $ordinance->status,
             'status_label' => self::statusLabel($ordinance->status),
             'enacted_on' => $ordinance->enacted_on?->toDateString(),
-            'approved_on' => $ordinance->approved_on?->toDateString(),
-            'vetoed_on' => $ordinance->vetoed_on?->toDateString(),
-            'veto_overridden_on' => $ordinance->veto_overridden_on?->toDateString(),
             'effectivity_date' => $ordinance->effectivity_date?->toDateString(),
-            'publication_date' => $ordinance->publication_date?->toDateString(),
-            'publication_medium' => $ordinance->publication_medium,
-            'sp_submitted_on' => $ordinance->sp_submitted_on?->toDateString(),
-            'sp_reviewed_on' => $ordinance->sp_reviewed_on?->toDateString(),
-            'sp_result' => $ordinance->sp_result,
             'imported_at' => $ordinance->imported_at?->toIso8601String(),
             'updated_at' => $ordinance->updated_at?->toIso8601String(),
             'document' => $ordinance->document ? self::summary($ordinance->document) : null,
@@ -379,10 +416,6 @@ class DocumentResource
             'effectivity_date' => $resolution->effectivity_date?->toDateString(),
             'transmitted_on' => $resolution->transmitted_on?->toDateString(),
             'transmitted_to' => $resolution->transmitted_to,
-            'lce_sp_required' => $resolution->lce_sp_required,
-            'sp_submitted_on' => $resolution->sp_submitted_on?->toDateString(),
-            'sp_reviewed_on' => $resolution->sp_reviewed_on?->toDateString(),
-            'sp_result' => $resolution->sp_result,
             'imported_at' => $resolution->imported_at?->toIso8601String(),
             'updated_at' => $resolution->updated_at?->toIso8601String(),
             'document' => $resolution->document ? self::summary($resolution->document) : null,

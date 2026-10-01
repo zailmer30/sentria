@@ -1,3 +1,4 @@
+import { LegislativeHistoryDrawer } from '@/components/legislation/LegislativeHistoryPreview';
 import { LegislationRegisterNav } from '@/components/legislation/LegislationRegisterNav';
 import { Button } from '@/components/ui/button';
 import { EmptyState } from '@/components/ui/empty-state';
@@ -300,11 +301,15 @@ export default function OrdinancesIndex({ ordinances, summary, filters, statuses
                                             <RegisterOpenLink href={`/ordinances/${ordinance.id}`}>
                                                 {t('register.open')}
                                             </RegisterOpenLink>
-                                            <Button variant="ghost" size="sm" asChild>
-                                                <Link href={`/ordinances/${ordinance.id}/history`}>
+                                            <LegislativeHistoryDrawer
+                                                href={`/ordinances/${ordinance.id}/history`}
+                                                title={ordinance.title}
+                                                number={ordinance.ordinance_number}
+                                            >
+                                                <Button type="button" variant="ghost" size="sm">
                                                     {t('legislation.history_title')}
-                                                </Link>
-                                            </Button>
+                                                </Button>
+                                            </LegislativeHistoryDrawer>
                                         </RegisterCellActions>
                                     </RegisterRow>
                                 ))

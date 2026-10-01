@@ -8,6 +8,7 @@ use Illuminate\Database\Eloquent\Concerns\HasUlids;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
+use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\SoftDeletes;
 use OwenIt\Auditing\Auditable as AuditableTrait;
 use OwenIt\Auditing\Contracts\Auditable;
@@ -64,6 +65,12 @@ class Transcript extends Model implements Auditable
     public function creator(): BelongsTo
     {
         return $this->belongsTo(User::class, 'created_by');
+    }
+
+    /** @return HasMany<TranscriptSegmentEdit, $this> */
+    public function segmentEdits(): HasMany
+    {
+        return $this->hasMany(TranscriptSegmentEdit::class)->orderBy('created_at');
     }
 
     public function isMachineGenerated(): bool

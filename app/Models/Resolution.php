@@ -19,10 +19,6 @@ use OwenIt\Auditing\Contracts\Auditable;
  * @property Carbon|null $adopted_on
  * @property Carbon|null $effectivity_date
  * @property Carbon|null $transmitted_on
- * @property bool $lce_sp_required
- * @property Carbon|null $sp_submitted_on
- * @property Carbon|null $sp_reviewed_on
- * @property string|null $sp_result
  * @property Carbon|null $imported_at
  */
 #[UseFactory(ResolutionFactory::class)]
@@ -50,9 +46,6 @@ class Resolution extends Model implements Auditable, HoldsSignedCopy
             'adopted_on' => 'date',
             'effectivity_date' => 'date',
             'transmitted_on' => 'date',
-            'lce_sp_required' => 'boolean',
-            'sp_submitted_on' => 'date',
-            'sp_reviewed_on' => 'date',
             'imported_at' => 'datetime',
         ];
     }

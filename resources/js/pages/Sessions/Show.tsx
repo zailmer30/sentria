@@ -1,22 +1,38 @@
-import { AgendaBuilderToolbar, AgendaList } from '@/components/session/AgendaBuilder';
+import { AgendaBuilderToolbar, AgendaList, type MinutesConsideration } from '@/components/session/AgendaBuilder';
 import { CalendarDocket } from '@/components/session/CalendarDocket';
-import type { CalendarDocketItem } from '@/pages/Sessions/Floor/shared';
-import { QuorumMeter } from '@/components/session/QuorumMeter';
+import { QuorumCard, type QuorumSummary } from '@/components/session/QuorumCard';
 import { Button } from '@/components/ui/button';
 import { EmptyState } from '@/components/ui/empty-state';
-import { Panel, PanelBody, PanelHead, PanelTitle } from '@/components/ui/panel';
+import { Panel, PanelHead, PanelTitle } from '@/components/ui/panel';
 import { LiveDot, toneForState } from '@/components/ui/status';
-import { Toolbar, ToolbarGroup } from '@/components/ui/toolbar';
-import { SimpleSelect } from '@/components/ui/select';
 import AppLayout from '@/layouts/AppLayout';
 import { EMPTY_VALUE, useFormatters } from '@/lib/format';
 import { useTranslations } from '@/lib/i18n';
 import { floorPath, preferredFloorPath, sessionDisplayTitle } from '@/lib/sessionFloor';
 import { cn } from '@/lib/utils';
+import type { CalendarDocketItem } from '@/pages/Sessions/Floor/shared';
 import type { PageProps } from '@/types';
 import { Link, router, usePage } from '@inertiajs/react';
 import type { LucideIcon } from 'lucide-react';
-import { ArrowLeft, CalendarClock, Gavel, Hash, ListOrdered, ScrollText, UserRound } from 'lucide-react';
+import {
+    ArrowLeft,
+    CalendarCheck,
+    CalendarClock,
+    Check,
+    ClipboardCheck,
+    ClipboardList,
+    Gavel,
+    Hash,
+    LayoutDashboard,
+    ListOrdered,
+    Loader2,
+    Monitor,
+    Pause,
+    Pencil,
+    Play,
+    ScrollText,
+    UserRound,
+} from 'lucide-react';
 import { useMemo, useState } from 'react';
 
 /**
@@ -36,6 +52,7 @@ type AgendaItem = {
     position: number;
     item_number: string | null;
     title: string;
+    description?: string | null;
     category: string;
     status: string;
     document_id: string | null;
@@ -53,6 +70,7 @@ type AgendaItem = {
     can_postpone?: boolean;
     can_undo?: boolean;
     carried_to?: { id: string; session_number: string; title: string } | null;
+    minutes_corrections?: import('@/components/session/MinutesCorrectionsPanel').MinutesCorrectionRow[];
 };
 
 type SessionDetail = {
@@ -63,8 +81,6 @@ type SessionDetail = {
     type_label: string;
     status: string;
     status_label: string;
-    recording_enabled?: boolean;
-    capture_mode?: 'mixer_mix' | 'per_seat';
     venue: string | null;
     scheduled_start_at: string | null;
     presiding_officer: string | null;
@@ -73,16 +89,9 @@ type SessionDetail = {
     agenda_items: AgendaItem[];
 };
 
-type Quorum = {
-    seated_count: number;
-    present_count: number;
-    required: number;
-    met: boolean;
-};
-
 type Props = {
     session: SessionDetail;
-    quorum: Quorum;
+    quorum: QuorumSummary;
     agenda_documents?: {
         id: string;
         title: string;
@@ -92,41 +101,74 @@ type Props = {
         current_reading?: number | null;
     }[];
     calendar_docket?: CalendarDocketItem[];
+    minutes_consideration?: MinutesConsideration;
     can: Record<string, boolean>;
 };
 
 type WorkflowStep = {
     route: string;
+    /** A page to open. Status changes stay on `route` and post instead. */
+    href?: string;
     labelKey: string;
+    icon: LucideIcon;
     variant: 'primary' | 'secondary' | 'live';
     group: 'prepare' | 'chamber';
     disabled?: boolean;
     disabledReason?: string;
 };
 
-/** Named so the toolbar reads like the console's Session controls. */
+/** Named so the card reads like the console's Session controls. */
 const GROUP_LABEL: Record<WorkflowStep['group'], string> = {
     prepare: 'sessions.workflow_prepare',
     chamber: 'sessions.workflow_chamber',
 };
 
-export default function SessionsShow({ session, quorum, agenda_documents = [], calendar_docket = [], can }: Props) {
+/** The sitting's lifecycle as the stepper draws it; sub-states fold into their stage. */
+const STAGES = ['draft', 'agenda-prepared', 'scheduled', 'in-session', 'adjourned', 'finalized'] as const;
+
+const STAGE_OF: Record<string, (typeof STAGES)[number]> = {
+    'documents-distributed': 'scheduled',
+    suspended: 'in-session',
+    'minutes-for-review': 'adjourned',
+    archived: 'finalized',
+};
+
+const STAGE_COPY: Record<string, { icon: LucideIcon; title: string; hint: string }> = {
+    draft: { icon: ClipboardList, title: 'sessions.stage_next_draft', hint: 'sessions.stage_next_draft_hint' },
+    'agenda-prepared': {
+        icon: CalendarClock,
+        title: 'sessions.stage_next_agenda_prepared',
+        hint: 'sessions.stage_next_agenda_prepared_hint',
+    },
+    scheduled: { icon: Play, title: 'sessions.stage_next_scheduled', hint: 'sessions.stage_next_scheduled_hint' },
+    'in-session': { icon: Gavel, title: 'sessions.stage_next_in_session', hint: 'sessions.stage_next_in_session_hint' },
+    suspended: { icon: Pause, title: 'sessions.stage_next_suspended', hint: 'sessions.stage_next_suspended_hint' },
+};
+
+export default function SessionsShow({
+    session,
+    quorum,
+    agenda_documents = [],
+    calendar_docket = [],
+    minutes_consideration,
+    can,
+}: Props) {
     const { t } = useTranslations();
     const { formatDateTime } = useFormatters();
     const { auth } = usePage<PageProps>().props;
     const [pending, setPending] = useState<string | null>(null);
 
     const isLive = toneForState(session.status) === 'live';
-    const inChamber = session.status === 'in-session' || session.status === 'suspended';
-    const floorHref = preferredFloorPath(session.id, auth.user);
     const agendaEditable =
         Boolean(can.manage_agenda) && !['adjourned', 'minutes-for-review', 'finalized', 'archived'].includes(session.status);
 
-    const votingOpen = session.agenda_items.some((item) => item.status === 'in-progress' && item.voting_open);
-    const advanceBlocked = Boolean(session.advance_blocked_reason) || votingOpen;
     const steps = useMemo(
-        () => workflowSteps(session.status, can, advanceBlocked, session.advance_blocked_reason),
-        [session.status, can, advanceBlocked, session.advance_blocked_reason],
+        () =>
+            workflowSteps(session.status, can, {
+                floor: preferredFloorPath(session.id, auth.user),
+                dashboard: floorPath(session.id, 'dashboard'),
+            }),
+        [session.status, can, session.id, auth.user],
     );
 
     function transition(routeName: string) {
@@ -146,13 +188,6 @@ export default function SessionsShow({ session, quorum, agenda_documents = [], c
 
     const facts: HeroFact[] = [
         {
-            key: 'number',
-            icon: Hash,
-            label: t('sessions.number'),
-            value: session.session_number,
-            mono: true,
-        },
-        {
             key: 'type',
             icon: ScrollText,
             label: t('sessions.type'),
@@ -165,18 +200,21 @@ export default function SessionsShow({ session, quorum, agenda_documents = [], c
             value: session.presiding_officer ?? t('sessions.none'),
             muted: !session.presiding_officer,
         },
-    ];
-
-    const destinations: Destination[] = [
-        ...(inChamber
-            ? [
-                  { href: floorHref, label: t('sessions.open_floor'), emphasis: true },
-                  { href: floorPath(session.id, 'dashboard'), label: t('sessions.floor.dashboard') },
-              ]
-            : []),
-        ...(can.update ? [{ href: `/sessions/${session.id}/edit`, label: t('sessions.edit') }] : []),
-        { href: `/sessions/${session.id}/attendance`, label: t('sessions.attendance') },
-        ...(can.view_transcript ? [{ href: `/sessions/${session.id}/transcript`, label: t('transcripts.live') }] : []),
+        {
+            key: 'scheduled',
+            icon: CalendarClock,
+            label: t('sessions.scheduled'),
+            value: session.scheduled_start_at ? scheduled : t('sessions.unscheduled'),
+            muted: !session.scheduled_start_at,
+            mono: true,
+        },
+        {
+            key: 'secretary',
+            icon: UserRound,
+            label: t('sessions.secretary'),
+            value: session.secretary ?? EMPTY_VALUE,
+            muted: !session.secretary,
+        },
     ];
 
     return (
@@ -185,7 +223,17 @@ export default function SessionsShow({ session, quorum, agenda_documents = [], c
                 <section className="relative overflow-hidden rounded-[var(--radius-lg)] bg-floor-plate px-5 py-5 shadow-[var(--shadow-md)] md:px-6 md:py-6">
                     <div className="flex items-start justify-between gap-4">
                         <div className="min-w-0">
-                            <span className="text-eyebrow text-floor-ink-faint">{t('sessions.title')}</span>
+                            <p className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                                <span className="text-eyebrow text-floor-ink-faint">{t('sessions.title')}</span>
+                                <span aria-hidden="true" className="text-floor-ink-faint">
+                                    ·
+                                </span>
+                                <span className="inline-flex items-center gap-1 font-mono text-xs font-medium tracking-[-0.01em] text-floor-ink-muted">
+                                    <Hash aria-hidden="true" strokeWidth={1.75} className="size-3.5" />
+                                    <span className="sr-only">{t('sessions.number')}</span>
+                                    {session.session_number}
+                                </span>
+                            </p>
 
                             <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-2">
                                 <h1 className="text-2xl font-semibold tracking-[-0.02em] text-floor-ink md:text-[1.75rem]">
@@ -205,176 +253,72 @@ export default function SessionsShow({ session, quorum, agenda_documents = [], c
                             <p className="mt-1 text-sm text-floor-ink-muted">{session.venue ?? session.type_label}</p>
                         </div>
 
-                        <Button
-                            variant="secondary"
-                            size="sm"
-                            asChild
-                            className="shrink-0 border-floor-line bg-floor-sunk text-floor-ink hover:bg-floor-sunk hover:text-floor-ink"
-                        >
-                            <Link href="/sessions">
-                                <ArrowLeft aria-hidden="true" strokeWidth={1.75} className="size-3.5" />
-                                {t('sessions.back_to_register')}
-                            </Link>
-                        </Button>
+                        <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
+                            {can.update ? (
+                                <Button
+                                    variant="secondary"
+                                    size="sm"
+                                    asChild
+                                    className="border-floor-line bg-floor-sunk text-floor-ink hover:bg-floor-sunk hover:text-floor-ink"
+                                >
+                                    <Link href={`/sessions/${session.id}/edit`}>
+                                        <Pencil aria-hidden="true" strokeWidth={1.75} className="size-3.5" />
+                                        {t('sessions.edit')}
+                                    </Link>
+                                </Button>
+                            ) : null}
+                            <Button
+                                variant="secondary"
+                                size="sm"
+                                asChild
+                                className="border-floor-line bg-floor-sunk text-floor-ink hover:bg-floor-sunk hover:text-floor-ink"
+                            >
+                                <Link href="/sessions">
+                                    <ArrowLeft aria-hidden="true" strokeWidth={1.75} className="size-3.5" />
+                                    {t('sessions.back_to_register')}
+                                </Link>
+                            </Button>
+                        </div>
                     </div>
 
-                    <dl className="mt-5 grid divide-y divide-floor-line overflow-hidden rounded-[var(--radius-md)] border border-floor-line bg-floor-sunk sm:grid-cols-3 sm:divide-x sm:divide-y-0">
-                        {facts.map((fact) => {
-                            const Icon = fact.icon;
+                    <div className="mt-5 grid overflow-hidden rounded-[var(--radius-md)] border border-floor-line bg-floor-sunk lg:grid-cols-[minmax(0,5fr)_minmax(0,7fr)]">
+                        <QuorumCard
+                            quorum={quorum}
+                            tone="plate"
+                            className="border-b border-floor-line lg:border-r lg:border-b-0"
+                        />
+                        <dl className="grid sm:grid-cols-2">
+                            {facts.map((fact) => {
+                                const Icon = fact.icon;
 
-                            return (
-                                <div key={fact.key} className="min-w-0 px-4 py-3">
-                                    <dt className="flex items-center gap-1.5 text-2xs font-semibold tracking-[0.06em] text-floor-ink-faint uppercase">
-                                        <Icon aria-hidden="true" strokeWidth={1.75} className="size-3.5 shrink-0" />
-                                        <span className="truncate">{fact.label}</span>
-                                    </dt>
-                                    <dd
-                                        className={cn(
-                                            'mt-1.5 truncate text-md font-medium',
-                                            fact.mono && 'font-mono tracking-[-0.02em]',
-                                            fact.muted ? 'text-floor-ink-faint' : 'text-floor-ink',
-                                        )}
+                                return (
+                                    <div
+                                        key={fact.key}
+                                        className="flex min-w-0 flex-col justify-center border-floor-line px-4 py-3 not-last:border-b sm:odd:border-r sm:[&:nth-last-child(-n+2)]:border-b-0"
                                     >
-                                        {fact.value}
-                                    </dd>
-                                </div>
-                            );
-                        })}
-                    </dl>
+                                        <dt className="flex items-center gap-1.5 text-2xs font-semibold tracking-[0.06em] text-floor-ink-faint uppercase">
+                                            <Icon aria-hidden="true" strokeWidth={1.75} className="size-3.5 shrink-0" />
+                                            <span className="truncate">{fact.label}</span>
+                                        </dt>
+                                        <dd
+                                            className={cn(
+                                                'mt-1.5 truncate text-md font-medium',
+                                                fact.mono && 'font-mono tracking-[-0.02em]',
+                                                fact.muted ? 'text-floor-ink-faint' : 'text-floor-ink',
+                                            )}
+                                        >
+                                            {fact.value}
+                                        </dd>
+                                    </div>
+                                );
+                            })}
+                        </dl>
+                    </div>
                 </section>
 
-                <nav
-                    aria-label={t('sessions.views')}
-                    className="inline-flex max-w-full flex-wrap items-center gap-1 self-start rounded-full border border-line bg-canvas-sunk p-1"
-                >
-                    {destinations.map((destination) => (
-                        <Link
-                            key={destination.href}
-                            href={destination.href}
-                            className={cn(
-                                'inline-flex min-h-9 items-center rounded-full px-3.5 py-1.5 text-sm font-medium transition-colors duration-[var(--duration-fast)]',
-                                'focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--color-focus)]',
-                                destination.emphasis
-                                    ? 'bg-accent text-[var(--color-accent-on)] shadow-[var(--shadow-xs)] hover:bg-[var(--color-accent-hover)]'
-                                    : 'text-ink-muted hover:bg-surface hover:text-ink',
-                            )}
-                        >
-                            {destination.label}
-                        </Link>
-                    ))}
-                </nav>
-
                 {steps.length > 0 ? (
-                    <Toolbar label={t('sessions.workflow')}>
-                        {(['prepare', 'chamber'] as const).map((group) => {
-                            const grouped = steps.filter((step) => step.group === group);
-
-                            if (grouped.length === 0) {
-                                return null;
-                            }
-
-                            return (
-                                <ToolbarGroup key={group} label={t(GROUP_LABEL[group])}>
-                                    {grouped.map((step) => (
-                                        <Button
-                                            key={step.route}
-                                            size="sm"
-                                            variant={step.variant}
-                                            disabled={pending !== null || Boolean(step.disabled)}
-                                            title={step.disabled ? t(step.disabledReason ?? 'sessions.advance_blocked_voting') : undefined}
-                                            onClick={() => transition(step.route)}
-                                        >
-                                            {t(step.labelKey)}
-                                        </Button>
-                                    ))}
-                                </ToolbarGroup>
-                            );
-                        })}
-                    </Toolbar>
+                    <WorkflowCard status={session.status} steps={steps} pending={pending} onTransition={transition} />
                 ) : null}
-
-                {can.manage_recording ? (
-                    <Toolbar label={t('chamber.recording_controls')}>
-                        <ToolbarGroup label={t('chamber.recording')}>
-                            <SimpleSelect
-                                value={session.capture_mode ?? 'mixer_mix'}
-                                onValueChange={(value) => {
-                                    if (!value || value === (session.capture_mode ?? 'mixer_mix')) {
-                                        return;
-                                    }
-
-                                    setPending('recording');
-                                    router.post(
-                                        `/sessions/${session.id}/recording`,
-                                        { capture_mode: value },
-                                        {
-                                            preserveScroll: true,
-                                            onFinish: () => setPending(null),
-                                        },
-                                    );
-                                }}
-                                items={[
-                                    { value: 'mixer_mix', label: t('chamber.feed.mixer_mix') },
-                                    { value: 'per_seat', label: t('chamber.feed.per_seat') },
-                                ]}
-                                disabled={pending !== null}
-                                className="h-8 min-w-[12rem] text-xs"
-                            />
-                            <Button
-                                size="sm"
-                                variant={session.recording_enabled ? 'secondary' : 'primary'}
-                                disabled={pending !== null}
-                                onClick={() => {
-                                    setPending('recording');
-                                    router.post(
-                                        `/sessions/${session.id}/recording`,
-                                        { recording_enabled: !session.recording_enabled },
-                                        {
-                                            preserveScroll: true,
-                                            onFinish: () => setPending(null),
-                                        },
-                                    );
-                                }}
-                            >
-                                {session.recording_enabled
-                                    ? t('chamber.disable_recording')
-                                    : t('chamber.enable_recording')}
-                            </Button>
-                        </ToolbarGroup>
-                    </Toolbar>
-                ) : null}
-
-                <Panel raised={isLive}>
-                    <PanelBody className="p-0">
-                        <dl className="grid sm:grid-cols-3">
-                            <div className="min-w-0 px-5 py-4">
-                                <dt className="label-eyebrow">{t('sessions.quorum')}</dt>
-                                <dd className="mt-1.5">
-                                    <QuorumMeter
-                                        presentCount={quorum.present_count}
-                                        seatedCount={quorum.seated_count}
-                                        required={quorum.required}
-                                        met={quorum.met}
-                                        markers={false}
-                                    />
-                                </dd>
-                            </div>
-                            <StatBlock
-                                icon={CalendarClock}
-                                label={t('sessions.scheduled')}
-                                value={session.scheduled_start_at ? scheduled : t('sessions.unscheduled')}
-                                muted={!session.scheduled_start_at}
-                                mono
-                            />
-                            <StatBlock
-                                icon={UserRound}
-                                label={t('sessions.secretary')}
-                                value={session.secretary ?? EMPTY_VALUE}
-                                muted={!session.secretary}
-                            />
-                        </dl>
-                    </PanelBody>
-                </Panel>
 
                 <Panel>
                     <PanelHead sunk>
@@ -414,6 +358,11 @@ export default function SessionsShow({ session, quorum, agenda_documents = [], c
                             items={session.agenda_items}
                             documents={agenda_documents}
                             editable={agendaEditable}
+                            minutesConsideration={minutes_consideration ?? null}
+                            applyCorrections={
+                                Boolean(can.manage_agenda) &&
+                                ['adjourned', 'minutes-for-review', 'finalized', 'archived'].includes(session.status)
+                            }
                         />
                     )}
                 </Panel>
@@ -434,51 +383,166 @@ type HeroFact = {
     muted?: boolean;
 };
 
-type Destination = {
-    href: string;
-    label: string;
-    /** The one chamber destination that wears the national blue. */
-    emphasis?: boolean;
-};
-
-/** Label above, value below — the stat block the chamber plate uses. */
-function StatBlock({
-    icon: Icon,
-    label,
-    value,
-    mono = false,
-    muted = false,
+/**
+ * The next lawful move, stated as a sentence with its actions beside it, over
+ * a stepper showing where the sitting stands in its lifecycle.
+ */
+function WorkflowCard({
+    status,
+    steps,
+    pending,
+    onTransition,
 }: {
-    icon: LucideIcon;
-    label: string;
-    value: string;
-    mono?: boolean;
-    muted?: boolean;
+    status: string;
+    steps: WorkflowStep[];
+    pending: string | null;
+    onTransition: (route: string) => void;
 }) {
+    const { t } = useTranslations();
+    const stage = STAGE_OF[status] ?? status;
+    const currentIndex = STAGES.indexOf(stage as (typeof STAGES)[number]);
+    const copy = STAGE_COPY[status] ?? STAGE_COPY[stage];
+    const Icon = copy?.icon ?? ListOrdered;
+    const live = status === 'in-session';
+    const blocked = steps.find((step) => step.disabled && step.disabledReason);
+
     return (
-        <div className="min-w-0 border-t border-line px-5 py-4 sm:border-t-0 sm:border-l">
-            <dt className="label-eyebrow flex items-center gap-1.5">
-                <Icon aria-hidden="true" strokeWidth={1.75} className="size-3 shrink-0 text-ink-faint" />
-                <span className="truncate">{label}</span>
-            </dt>
-            <dd
-                className={cn(
-                    'mt-1.5 truncate text-md font-medium',
-                    mono && 'font-mono tracking-[-0.02em]',
-                    muted ? 'text-ink-faint' : 'text-ink',
-                )}
-            >
-                {value}
-            </dd>
-        </div>
+        <section
+            aria-label={t('sessions.workflow')}
+            className="overflow-hidden rounded-[var(--radius-lg)] border border-line bg-surface shadow-[var(--shadow-xs)]"
+        >
+            <div className="flex flex-col gap-4 px-5 py-4 md:flex-row md:items-center md:justify-between md:gap-6">
+                <div className="flex min-w-0 items-start gap-3.5">
+                    <span
+                        aria-hidden="true"
+                        className={cn(
+                            'flex size-10 shrink-0 items-center justify-center rounded-[var(--radius-md)] border',
+                            live
+                                ? 'border-[var(--color-live-line)] bg-live-soft text-live'
+                                : 'border-accent-line bg-accent-soft text-accent',
+                        )}
+                    >
+                        <Icon strokeWidth={1.75} className="size-5" />
+                    </span>
+                    <div className="min-w-0">
+                        <p className="label-eyebrow flex items-center gap-1.5">
+                            {live ? <LiveDot /> : null}
+                            {t('sessions.next_step')}
+                            <span aria-hidden="true" className="text-ink-faint">
+                                ·
+                            </span>
+                            {t(GROUP_LABEL[steps[0]?.group ?? 'prepare'])}
+                        </p>
+                        {copy ? (
+                            <>
+                                <h2 className="mt-1 text-md font-semibold tracking-[-0.01em] text-ink">{t(copy.title)}</h2>
+                                <p className="mt-0.5 text-sm text-ink-muted">{t(copy.hint)}</p>
+                            </>
+                        ) : null}
+                    </div>
+                </div>
+
+                <div className="flex shrink-0 flex-col gap-2 md:items-end">
+                    <div className="flex flex-wrap items-center gap-2 md:justify-end">
+                        {steps.map((step) => {
+                            const StepIcon = step.icon;
+                            const busy = pending === step.route;
+
+                            if (step.href) {
+                                return (
+                                    <Button key={step.route} variant={step.variant} asChild>
+                                        <Link href={step.href}>
+                                            <StepIcon aria-hidden="true" strokeWidth={1.75} />
+                                            {t(step.labelKey)}
+                                        </Link>
+                                    </Button>
+                                );
+                            }
+
+                            return (
+                                <Button
+                                    key={step.route}
+                                    variant={step.variant}
+                                    disabled={pending !== null || Boolean(step.disabled)}
+                                    aria-busy={busy || undefined}
+                                    title={
+                                        step.disabled ? t(step.disabledReason ?? 'sessions.advance_blocked_voting') : undefined
+                                    }
+                                    onClick={() => onTransition(step.route)}
+                                >
+                                    {busy ? (
+                                        <Loader2 aria-hidden="true" strokeWidth={2} className="animate-spin" />
+                                    ) : (
+                                        <StepIcon aria-hidden="true" strokeWidth={1.75} />
+                                    )}
+                                    {t(step.labelKey)}
+                                </Button>
+                            );
+                        })}
+                    </div>
+                    {blocked ? <p className="text-xs text-ink-muted md:text-right">{t(blocked.disabledReason ?? '')}</p> : null}
+                </div>
+            </div>
+
+            {currentIndex >= 0 ? (
+                <div className="border-t border-line bg-surface-alt px-5 py-3.5">
+                    <ol aria-label={t('sessions.lifecycle')} className="flex items-start">
+                        {STAGES.map((key, index) => {
+                            const done = index < currentIndex;
+                            const current = index === currentIndex;
+
+                            return (
+                                <li
+                                    key={key}
+                                    aria-current={current ? 'step' : undefined}
+                                    className="relative flex min-w-0 flex-1 flex-col items-center gap-1.5 text-center"
+                                >
+                                    {index > 0 ? (
+                                        <span
+                                            aria-hidden="true"
+                                            className={cn(
+                                                'absolute top-3 right-1/2 h-0.5 w-full -translate-y-1/2 rounded-full',
+                                                index <= currentIndex ? 'bg-accent' : 'bg-line',
+                                            )}
+                                        />
+                                    ) : null}
+                                    <span
+                                        aria-hidden="true"
+                                        className={cn(
+                                            'relative z-10 flex size-6 items-center justify-center rounded-full border font-mono text-2xs font-semibold',
+                                            done && 'border-accent bg-accent text-[var(--color-accent-on)]',
+                                            current &&
+                                                (live
+                                                    ? 'border-live bg-live text-[var(--color-live-on)] ring-4 ring-live-soft'
+                                                    : 'border-accent bg-surface text-accent ring-4 ring-accent-soft'),
+                                            !done && !current && 'border-line-control bg-surface text-ink-faint',
+                                        )}
+                                    >
+                                        {done ? <Check strokeWidth={2.5} className="size-3.5" /> : index + 1}
+                                    </span>
+                                    <span
+                                        className={cn(
+                                            'max-w-full truncate px-1 text-2xs font-medium',
+                                            current ? 'text-ink' : done ? 'text-ink-muted' : 'hidden text-ink-faint sm:block',
+                                            done && 'hidden sm:block',
+                                        )}
+                                    >
+                                        {t(`sessions.stage_${key.replace(/-/g, '_')}`)}
+                                    </span>
+                                </li>
+                            );
+                        })}
+                    </ol>
+                </div>
+            ) : null}
+        </section>
     );
 }
 
 function workflowSteps(
     status: string,
     can: Record<string, boolean>,
-    advanceBlocked = false,
-    advanceBlockedReason?: string | null,
+    chamberLinks: { floor: string; dashboard: string },
 ): WorkflowStep[] {
     const steps: WorkflowStep[] = [];
 
@@ -486,40 +550,49 @@ function workflowSteps(
         steps.push({
             route: 'prepare-agenda',
             labelKey: 'sessions.action_prepare_agenda',
+            icon: ClipboardCheck,
             variant: 'primary',
             group: 'prepare',
         });
     }
 
     if (status === 'agenda-prepared' && can.schedule) {
-        steps.push({ route: 'schedule', labelKey: 'sessions.action_schedule', variant: 'primary', group: 'prepare' });
-    }
-
-    if ((status === 'scheduled' || status === 'documents-distributed') && can.start) {
-        steps.push({ route: 'start', labelKey: 'sessions.action_start', variant: 'primary', group: 'chamber' });
-    }
-
-    if (status === 'in-session' && can.manage_agenda) {
         steps.push({
-            route: 'agenda/advance',
-            labelKey: 'sessions.action_next_item',
-            variant: 'secondary',
-            group: 'chamber',
-            disabled: advanceBlocked,
-            disabledReason: advanceBlockedReason ?? 'sessions.advance_blocked_voting',
+            route: 'schedule',
+            labelKey: 'sessions.action_schedule',
+            icon: CalendarCheck,
+            variant: 'primary',
+            group: 'prepare',
         });
     }
 
-    if (status === 'in-session' && can.suspend) {
-        steps.push({ route: 'suspend', labelKey: 'sessions.action_suspend', variant: 'secondary', group: 'chamber' });
+    if ((status === 'scheduled' || status === 'documents-distributed') && can.start) {
+        steps.push({ route: 'start', labelKey: 'sessions.action_start', icon: Play, variant: 'primary', group: 'chamber' });
     }
 
     if (status === 'suspended' && can.resume) {
-        steps.push({ route: 'resume', labelKey: 'sessions.action_resume', variant: 'primary', group: 'chamber' });
+        steps.push({ route: 'resume', labelKey: 'sessions.action_resume', icon: Play, variant: 'primary', group: 'chamber' });
     }
 
-    if ((status === 'in-session' || status === 'suspended') && can.adjourn) {
-        steps.push({ route: 'adjourn', labelKey: 'sessions.action_adjourn', variant: 'live', group: 'chamber' });
+    if (status === 'in-session' || status === 'suspended') {
+        steps.push(
+            {
+                route: 'paperless',
+                href: chamberLinks.floor,
+                labelKey: 'sessions.open_floor',
+                icon: Monitor,
+                variant: status === 'in-session' ? 'primary' : 'secondary',
+                group: 'chamber',
+            },
+            {
+                route: 'dashboard',
+                href: chamberLinks.dashboard,
+                labelKey: 'sessions.floor.dashboard',
+                icon: LayoutDashboard,
+                variant: 'secondary',
+                group: 'chamber',
+            },
+        );
     }
 
     return steps;

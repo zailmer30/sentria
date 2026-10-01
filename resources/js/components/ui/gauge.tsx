@@ -24,6 +24,10 @@ type GaugeProps = {
     label: string;
     tone?: 'accent' | 'success' | 'warning' | 'live';
     size?: number;
+    /** 270 opens the ring at the bottom; 360 draws a closed ring starting at twelve o'clock. */
+    sweep?: 270 | 360;
+    /** Overrides the track stroke, e.g. on the navy chamber plate. */
+    trackClassName?: string;
     className?: string;
 };
 
@@ -35,7 +39,6 @@ const TONE: Record<NonNullable<GaugeProps['tone']>, string> = {
 };
 
 /** Three-quarter sweep, opening at the bottom so the gap reads as deliberate. */
-const SWEEP = 270;
 const START = 135;
 
 export function Gauge({
@@ -46,18 +49,21 @@ export function Gauge({
     label,
     tone = 'accent',
     size = 132,
+    sweep = 270,
+    trackClassName,
     className,
 }: GaugeProps) {
     const safeMax = max > 0 ? max : 1;
     const ratio = Math.min(Math.max(value / safeMax, 0), 1);
+    const closed = sweep === 360;
 
     const radius = 46;
     const circumference = 2 * Math.PI * radius;
-    const arc = (circumference * SWEEP) / 360;
+    const arc = (circumference * sweep) / 360;
 
     const thresholdAngle =
         threshold !== undefined
-            ? START + (Math.min(Math.max(threshold / safeMax, 0), 1) * SWEEP)
+            ? (closed ? 0 : START) + Math.min(Math.max(threshold / safeMax, 0), 1) * sweep
             : null;
 
     return (
@@ -67,7 +73,11 @@ export function Gauge({
             role="img"
             aria-label={`${label}: ${value} of ${max}`}
         >
-            <svg viewBox="0 0 120 120" className="size-full -rotate-[135deg]" aria-hidden="true">
+            <svg
+                viewBox="0 0 120 120"
+                className={cn('size-full', closed ? '-rotate-90' : '-rotate-[135deg]')}
+                aria-hidden="true"
+            >
                 <circle
                     cx="60"
                     cy="60"
@@ -75,7 +85,7 @@ export function Gauge({
                     fill="none"
                     strokeWidth="9"
                     strokeLinecap="round"
-                    className="stroke-[var(--color-chart-track)]"
+                    className={trackClassName ?? 'stroke-[var(--color-chart-track)]'}
                     strokeDasharray={`${arc} ${circumference}`}
                 />
                 <circle

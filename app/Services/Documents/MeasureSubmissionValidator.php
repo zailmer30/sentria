@@ -33,10 +33,6 @@ class MeasureSubmissionValidator
             $missing['enacting_clause'] = 'An enacting or ordaining clause is required.';
         }
 
-        if ($document->proposed_effectivity === null || (int) $document->proposed_effectivity < 1) {
-            $missing['proposed_effectivity'] = 'Proposed effectivity is required.';
-        }
-
         if ($this->requiresExplanatoryNote($document->document_type)
             && ($document->explanatory_note === null || trim((string) $document->explanatory_note) === '')) {
             $missing['explanatory_note'] = 'An explanatory note is required for ordinances.';

@@ -126,6 +126,11 @@ export default function MinutesShow({ minutes, can }: Props) {
                                     {t('minutes.archive')}
                                 </Button>
                             ) : null}
+                            {can.download ? (
+                                <Button variant="secondary" size="sm" asChild>
+                                    <a href={`/minutes/${minutes.id}/pdf`}>{t('minutes.download_pdf')}</a>
+                                </Button>
+                            ) : null}
                         </Toolbar>
                     }
                 />

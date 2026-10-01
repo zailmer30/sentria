@@ -43,7 +43,7 @@ it('notifies secretariat when a board member submits a document', function (): v
             'confidentiality' => Confidentiality::Internal->value,
             'reference_number' => 'MO-2026-'.fake()->unique()->numerify('####'),
             'enacting_clause' => 'Be it ordained by the Sangguniang Bayan, that:',
-            'proposed_effectivity' => 10,
+            'external_author' => 'Maria Santos',
             'explanatory_note' => 'This measure is proposed to address the stated purpose.',
             'file' => UploadedFile::fake()->createWithContent('drainage.txt', "Section 1\n"),
         ])
@@ -66,7 +66,7 @@ it('does not notify the submitting secretariat user about their own upload', fun
             'confidentiality' => Confidentiality::Internal->value,
             'reference_number' => 'MO-2026-'.fake()->unique()->numerify('####'),
             'enacting_clause' => 'Be it ordained by the Sangguniang Bayan, that:',
-            'proposed_effectivity' => 10,
+            'external_author' => 'Maria Santos',
             'explanatory_note' => 'This measure is proposed to address the stated purpose.',
             'file' => UploadedFile::fake()->createWithContent('draft.txt', "Draft\n"),
         ])

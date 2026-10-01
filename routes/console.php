@@ -9,3 +9,4 @@ Artisan::command('inspire', function () {
 })->purpose('Display an inspiring quote');
 
 Schedule::command('sentria:prune-chamber-audio')->daily();
+Schedule::command('sentria:purge-session-chat')->daily();

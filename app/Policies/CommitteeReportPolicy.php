@@ -30,21 +30,19 @@ class CommitteeReportPolicy
 
     public function returnToDraft(User $user, CommitteeReport $report): bool
     {
-        return $user->can('reports.submit')
-            && $report->status === 'chair-review'
-            && $this->mayActAsChair($user, $report);
+        return $report->status === 'chair-review'
+            && ($user->can('reports.submit') || $this->mayActAsChair($user, $report));
     }
 
     public function submit(User $user, CommitteeReport $report): bool
     {
         return $user->can('reports.submit')
-            && $report->status === 'chair-review'
-            && $this->mayActAsChair($user, $report);
+            && in_array($report->status, ['draft', 'chair-review'], true);
     }
 
     public function adopt(User $user, CommitteeReport $report): bool
     {
-        return $user->can('reports.adopt') && $report->status === 'submitted';
+        return false;
     }
 
     private function mayActAsChair(User $user, CommitteeReport $report): bool

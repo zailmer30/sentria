@@ -14,7 +14,9 @@ import { useFormatters } from '@/lib/format';
 import { useTranslations } from '@/lib/i18n';
 import { cn } from '@/lib/utils';
 import {
+    Archive,
     BadgeCheck,
+    Ban,
     BookOpen,
     CalendarDays,
     CheckCircle2,
@@ -29,7 +31,7 @@ import {
     Users,
     type LucideIcon,
 } from 'lucide-react';
-import type { ReactNode } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 
 export type HistoryEvent = {
     stage: string;
@@ -60,6 +62,8 @@ const STAGE_ICON: Record<string, LucideIcon> = {
     amendment: FileStack,
     vote: CheckCircle2,
     approval: Stamp,
+    rejected: Ban,
+    archive: Archive,
     final_version: FileCheck,
 };
 
@@ -131,6 +135,108 @@ export function LegislativeHistorySheet({
                 </SheetHeader>
                 <div className="min-h-0 flex-1 overflow-y-auto px-6 py-5">
                     {newestFirst.length === 0 ? (
+                        <EmptyState
+                            bare
+                            icon={History}
+                            title={t('legislation.history_empty')}
+                            description={t('legislation.history_subtitle')}
+                            className="py-10"
+                        />
+                    ) : (
+                        <HistoryTimeline events={newestFirst} formatDate={formatDate} showMeta />
+                    )}
+                </div>
+            </SheetContent>
+        </Sheet>
+    );
+}
+
+export function LegislativeHistoryDrawer({
+    href,
+    title,
+    number,
+    children,
+}: {
+    href: string;
+    title: string;
+    number: string;
+    children: ReactNode;
+}) {
+    const { t } = useTranslations();
+    const { formatDate } = useFormatters();
+    const [open, setOpen] = useState(false);
+    const [events, setEvents] = useState<HistoryEvent[] | null>(null);
+    const [failed, setFailed] = useState(false);
+
+    useEffect(() => {
+        if (!open || events !== null || failed) {
+            return;
+        }
+
+        const controller = new AbortController();
+
+        fetch(href, {
+            credentials: 'same-origin',
+            headers: { Accept: 'application/json' },
+            signal: controller.signal,
+        })
+            .then(async (response) => {
+                if (!response.ok) {
+                    throw new Error('history');
+                }
+
+                return response.json() as Promise<{ events?: HistoryEvent[] }>;
+            })
+            .then((payload) => {
+                setEvents(Array.isArray(payload.events) ? payload.events : []);
+            })
+            .catch((error: unknown) => {
+                if (error instanceof DOMException && error.name === 'AbortError') {
+                    return;
+                }
+
+                setFailed(true);
+            });
+
+        return () => controller.abort();
+    }, [open, href, events, failed]);
+
+    const newestFirst = (events ?? []).toReversed();
+
+    return (
+        <Sheet
+            open={open}
+            onOpenChange={(next) => {
+                setOpen(next);
+
+                if (next) {
+                    setFailed(false);
+                }
+            }}
+        >
+            <SheetTrigger asChild>{children}</SheetTrigger>
+            <SheetContent side="right" className="w-[min(36rem,92vw)] p-0" closeLabel={t('actions.close')}>
+                <SheetHeader className="px-6 py-5">
+                    <SheetTitle className="text-base">{title}</SheetTitle>
+                    <SheetDescription className="text-sm">
+                        {number}
+                        {' · '}
+                        {t('legislation.history_caption')}
+                    </SheetDescription>
+                </SheetHeader>
+                <div className="min-h-0 flex-1 overflow-y-auto px-6 py-5">
+                    {events === null && !failed ? (
+                        <p role="status" className="text-sm text-ink-muted">
+                            {t('legislation.history_loading')}
+                        </p>
+                    ) : failed ? (
+                        <EmptyState
+                            bare
+                            icon={History}
+                            title={t('legislation.history_unavailable')}
+                            className="py-10"
+                        />
+                    ) : newestFirst.length === 0 ? (
                         <EmptyState
                             bare
                             icon={History}

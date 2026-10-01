@@ -3,22 +3,30 @@
 namespace App\Http\Controllers;
 
 use App\Enums\DocumentType;
+use App\Enums\LegislationKind;
 use App\Http\Requests\Legislation\StoreResolutionRequest;
 use App\Http\Requests\Legislation\UpdateResolutionRequest;
 use App\Http\Resources\DocumentResource;
 use App\Http\Resources\PublicationResource;
 use App\Models\Document;
+use App\Models\Publication;
 use App\Models\Resolution;
+use App\Services\Legislation\LegislationNumberAllocator;
 use App\Services\Legislation\LegislativeHistoryService;
+use App\States\Publication\Published;
 use Illuminate\Database\Eloquent\Builder;
 use Illuminate\Http\RedirectResponse;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\DB;
 use Inertia\Inertia;
 use Inertia\Response;
 
 class ResolutionController extends Controller
 {
-    public function __construct(private readonly LegislativeHistoryService $history) {}
+    public function __construct(
+        private readonly LegislativeHistoryService $history,
+        private readonly LegislationNumberAllocator $numbers,
+    ) {}
 
     public function index(Request $request): Response
     {
@@ -67,12 +75,18 @@ class ResolutionController extends Controller
         return Inertia::render('Legislation/Resolutions/Form', [
             'resolution' => null,
             'documents' => Document::linkableOfTypes(DocumentType::resolutionMeasures()),
+            'nextNumber' => $this->numbers->preview(LegislationKind::Resolution),
+            'seriesYear' => (int) now()->year,
         ]);
     }
 
     public function store(StoreResolutionRequest $request): RedirectResponse
     {
-        $resolution = Resolution::query()->create($request->validated());
+        $resolution = DB::transaction(fn (): Resolution => Resolution::query()->create([
+            ...$request->validated(),
+            'resolution_number' => $this->numbers->allocate(LegislationKind::Resolution),
+            'series_year' => (int) now()->year,
+        ]));
 
         return redirect()
             ->route('resolutions.show', $resolution)
@@ -83,7 +97,7 @@ class ResolutionController extends Controller
     {
         $this->authorize('view', $resolution);
         $resolution->load([
-            'document.publications',
+            'document.publications.document',
             'document.currentVersion',
             'document.author',
             'document.committee',
@@ -107,6 +121,8 @@ class ResolutionController extends Controller
                 'update' => request()->user()?->can('update', $resolution) ?? false,
                 'createPublication' => request()->user()?->can('publications.review') ?? false,
             ],
+            'signedCopyRequiresConfirmation' => $resolution->document?->publications
+                ->contains(fn (Publication $publication): bool => $publication->status instanceof Published) ?? false,
         ]);
     }
 

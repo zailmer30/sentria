@@ -4,12 +4,16 @@ namespace App\Services\Legislation;
 
 use App\DTO\Legislation\LegislativeHistoryEvent;
 use App\Models\AgendaItem;
+use App\Models\Audit;
 use App\Models\Document;
 use App\Models\DocumentVersion;
 use App\Models\Ordinance;
+use App\Models\Resolution;
 use App\Models\Vote;
 use App\States\Document\Approved;
+use App\States\Document\Archive;
 use App\States\Document\FinalDocument;
+use App\States\Document\Rejected;
 use Illuminate\Support\Carbon;
 use Illuminate\Support\Collection;
 
@@ -91,6 +95,7 @@ class LegislativeHistoryService
                     'committee' => $referral->committee?->name,
                     'status' => $referral->status,
                     'instructions' => $referral->instructions,
+                    'meeting_on' => $referral->meeting_on?->toDateString(),
                 ],
             ));
 
@@ -210,8 +215,40 @@ class LegislativeHistoryService
             $events->push(new LegislativeHistoryEvent(
                 stage: 'approval',
                 label: 'Approved',
-                occurredAt: $document->updated_at?->toIso8601String(),
+                occurredAt: $this->notBefore(
+                    $this->enteredStatusAt($document, Approved::$name) ?? $document->updated_at,
+                    $events,
+                    ['first_reading', 'second_reading', 'third_reading', 'vote'],
+                )?->toIso8601String(),
                 description: $document->status->label(),
+            ));
+        }
+
+        $rejectedAt = $this->enteredStatusAt($document, Rejected::$name);
+
+        if ($document->status instanceof Rejected || $rejectedAt instanceof Carbon) {
+            $events->push(new LegislativeHistoryEvent(
+                stage: 'rejected',
+                label: 'Rejected',
+                occurredAt: $this->notBefore(
+                    $rejectedAt ?? $document->updated_at,
+                    $events,
+                    ['first_reading', 'second_reading', 'third_reading', 'vote'],
+                )?->toIso8601String(),
+                description: 'The measure was rejected.',
+            ));
+        }
+
+        if ($document->status instanceof Archive || $document->archived_at !== null) {
+            $events->push(new LegislativeHistoryEvent(
+                stage: 'archive',
+                label: 'Archive',
+                occurredAt: $this->notBefore(
+                    $document->archived_at ?? $this->enteredStatusAt($document, Archive::$name) ?? $document->updated_at,
+                    $events,
+                    ['rejected', 'approval'],
+                )?->toIso8601String(),
+                description: 'The measure was archived.',
             ));
         }
 
@@ -303,6 +340,18 @@ class LegislativeHistoryService
     }
 
     /**
+     * @return list<LegislativeHistoryEvent>
+     */
+    public function forResolution(Resolution $resolution): array
+    {
+        $resolution->loadMissing('document');
+
+        abort_unless($resolution->document instanceof Document, 404, 'Resolution has no linked document.');
+
+        return $this->forDocument($resolution->document);
+    }
+
+    /**
      * @param  Collection<int, LegislativeHistoryEvent>  $events
      * @return list<LegislativeHistoryEvent>
      */
@@ -310,10 +359,93 @@ class LegislativeHistoryService
     {
         /** @var list<LegislativeHistoryEvent> $sorted */
         $sorted = $events
-            ->sortBy(fn (LegislativeHistoryEvent $event): string => $event->occurredAt ?? '9999')
+            ->sortBy(fn (LegislativeHistoryEvent $event): string => sprintf(
+                '%s|%03d',
+                $event->occurredAt ?? '9999',
+                $this->stageRank($event->stage),
+            ))
             ->values()
             ->all();
 
         return $sorted;
+    }
+
+    /**
+     * When the status first became $status. A later archive keeps the rejection
+     * visible, because the status column only stores the current state.
+     */
+    private function enteredStatusAt(Document $document, string $status): ?Carbon
+    {
+        $audit = $document->audits()
+            ->orderBy('created_at')
+            ->orderBy('id')
+            ->get(['id', 'new_values', 'created_at'])
+            ->first(function (Audit $audit) use ($status): bool {
+                $values = $audit->new_values;
+
+                if (is_string($values)) {
+                    $decoded = json_decode($values, true);
+                    $values = is_array($decoded) ? $decoded : [];
+                }
+
+                return is_array($values) && ($values['status'] ?? null) === $status;
+            });
+
+        $enteredAt = $audit?->created_at;
+
+        return $enteredAt instanceof Carbon ? $enteredAt : null;
+    }
+
+    /**
+     * Keep an outcome from sorting ahead of the reading or vote that produced it
+     * when the status row is written a few seconds before the agenda item closes.
+     *
+     * @param  Collection<int, LegislativeHistoryEvent>  $events
+     * @param  list<string>  $stages
+     */
+    private function notBefore(?Carbon $at, Collection $events, array $stages): ?Carbon
+    {
+        $floor = null;
+
+        foreach ($events as $event) {
+            if (! in_array($event->stage, $stages, true) || $event->occurredAt === null) {
+                continue;
+            }
+
+            $occurredAt = Carbon::parse($event->occurredAt);
+
+            if ($floor === null || $occurredAt->greaterThan($floor)) {
+                $floor = $occurredAt;
+            }
+        }
+
+        if (! $floor instanceof Carbon || ($at instanceof Carbon && $at->greaterThanOrEqualTo($floor))) {
+            return $at;
+        }
+
+        return $floor->copy();
+    }
+
+    private function stageRank(string $stage): int
+    {
+        return match ($stage) {
+            'document' => 10,
+            'secretariat_review' => 20,
+            'returned_for_revision' => 30,
+            'registered' => 40,
+            'committee_referral' => 50,
+            'committee_report' => 55,
+            'first_reading' => 60,
+            'second_reading' => 61,
+            'third_reading' => 62,
+            'session' => 65,
+            'amendment' => 70,
+            'vote' => 80,
+            'approval' => 90,
+            'rejected' => 95,
+            'final_version' => 100,
+            'archive' => 110,
+            default => 50,
+        };
     }
 }

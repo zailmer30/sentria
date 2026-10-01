@@ -57,7 +57,7 @@ it('runs the session lifecycle through prepare, start, advance, and adjourn', fu
     $this->actingAs($secretariat)->post(route('sessions.prepare-agenda', $session))->assertRedirect();
     $session = $session->fresh();
     expect($session->status)->toBeInstanceOf(AgendaPrepared::class)
-        ->and($session->agendaItems()->count())->toBe(18);
+        ->and($session->agendaItems()->count())->toBe(17);
 
     $this->actingAs($secretariat)->post(route('sessions.schedule', $session))->assertRedirect();
     expect($session->fresh()->status)->toBeInstanceOf(Scheduled::class);
@@ -65,11 +65,26 @@ it('runs the session lifecycle through prepare, start, advance, and adjourn', fu
     $this->actingAs($secretariat)->post(route('sessions.start', $session))->assertRedirect();
     $session = $session->fresh();
     expect($session->status)->toBeInstanceOf(InSession::class)
-        ->and($session->agendaItems()->where('status', 'in-progress')->count())->toBe(1);
+        ->and($session->agendaItems()->where('status', 'in-progress')->count())->toBe(0)
+        ->and($session->agendaItems()->where('category', 'call-to-order')->value('status'))->toBe('pending');
+
+    $this->actingAs($secretariat)
+        ->get(route('sessions.floor.dashboard', $session))
+        ->assertOk()
+        ->assertInertia(fn (Assert $page) => $page
+            ->where('current_item', null)
+            ->where('next_item.category', 'call-to-order')
+            ->where('session.title', $session->title)
+            ->where('advance_blocked_reason', null));
 
     // Starting again while already in session must not throw TransitionNotFound.
     $this->actingAs($secretariat)->post(route('sessions.start', $session))->assertRedirect();
-    expect($session->fresh()->status)->toBeInstanceOf(InSession::class);
+    expect($session->fresh()->status)->toBeInstanceOf(InSession::class)
+        ->and($session->fresh()->agendaItems()->where('status', 'in-progress')->count())->toBe(0);
+
+    $this->actingAs($secretariat)->post(route('sessions.agenda.advance', $session))->assertRedirect();
+    expect($session->fresh()->agendaItems()->where('category', 'call-to-order')->value('status'))->toBe('in-progress')
+        ->and($session->fresh()->agendaItems()->where('status', 'completed')->count())->toBe(0);
 
     $this->actingAs($secretariat)->post(route('sessions.agenda.advance', $session))->assertRedirect();
     expect($session->fresh()->agendaItems()->where('status', 'completed')->count())->toBe(1)
@@ -77,6 +92,22 @@ it('runs the session lifecycle through prepare, start, advance, and adjourn', fu
 
     $this->actingAs($presiding)->post(route('sessions.adjourn', $session))->assertRedirect();
     expect($session->fresh()->status)->toBeInstanceOf(Adjourned::class);
+});
+
+it('refuses to open another item when nothing is pending', function (): void {
+    $secretariat = sessionActor(UserRole::Secretariat);
+    $session = LegislativeSession::factory()->inSession()->create();
+    AgendaItem::factory()->procedural('call-to-order', 'Call to Order', 1)->create([
+        'session_id' => $session->getKey(),
+        'status' => 'completed',
+    ]);
+
+    $this->actingAs($secretariat)
+        ->post(route('sessions.agenda.advance', $session))
+        ->assertRedirect()
+        ->assertSessionHas('error', 'sessions.no_next_item');
+
+    expect($session->fresh()->agendaItems()->where('status', 'in-progress')->count())->toBe(0);
 });
 
 it('allows adjourning a suspended session without resuming first', function (): void {
@@ -168,6 +199,7 @@ it('exposes a pdf preview url on agenda documents the viewer may download', func
         ->assertOk()
         ->assertInertia(fn (Assert $page) => $page
             ->component('Sessions/Show')
+            ->missing('can.manage_recording')
             ->where('session.agenda_items.0.document.slug', $document->slug)
             ->where('session.agenda_items.0.document.can_preview', true)
             ->where(

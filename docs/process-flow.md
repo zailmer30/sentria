@@ -20,10 +20,10 @@ flowchart TB
     pubAdvance[Advance publication workflow]
   end
 
-  subgraph committeeChair [Committee Chair]
-    refer[Create referral]
-    report[Draft and submit committee report]
-  end
+    subgraph committeeChair [Committee Chair]
+      refer[Create referral]
+      result[Record committee result]
+    end
 
   subgraph presiding [Presiding Officer]
     floorControl[Start suspend resume adjourn]
@@ -42,8 +42,8 @@ flowchart TB
 
   intake --> irpReview
   irpReview --> refer
-  refer --> report
-  report --> agendaBuild
+  refer --> result
+  result --> agendaBuild
   agendaBuild --> floorControl
   floorControl --> floorRead
   floorRead --> motionVote
@@ -91,7 +91,7 @@ flowchart TB
 
 Echo events on `session.{id}`: `SessionStateChanged`, `AttendanceUpdated`, `MotionRecorded`, `FloorRecognitionUpdated`, `VotingOpened`, `VoteCast`, `VotingClosed`, `AgendaItemChanged`, `HallDisplayChanged`, `HallDisplayViewChanged`. Transcript uses `session-transcript.{id}`.
 
-Standard agenda template (when preparing an empty agenda) follows the Sanggunian Order of Business: Call to Order; Opening Prayer; National Anthem (first regular session of the month), Municipal Hymn and Councilor's Creed; Roll Call; Reading and Approval of the Minutes of the Previous Session; Privilege Hour; First Reading and Referral to Committee; Committee Hour (Reports, Information, trial balance); Calendar of Business (Unfinished Business, Business for the Day, Unassigned Business); Business on Third and Final Reading; Other Matters / Announcements; Adjournment. Included measures are inserted under the matching heading so Adjournment stays last.
+Standard agenda template (when preparing an empty agenda) follows the Sanggunian Order of Business: Call to Order; Convocation (Opening Prayer, National Anthem on the first regular session of the month, Municipal Hymn and Councilor's Creed); Roll Call; Reading and Consideration of the Minutes; Privilege Hour; Reference of Business; Committee Hour (Reports, Information, trial balance); Calendar of Business (Unfinished Business, Business for the Day, Unassigned Business); Business on Third and Final Reading; Other Matters / Announcements; Adjournment. Included measures are inserted under the matching heading so Adjournment stays last.
 
 **As coded:** `present` and `late` count toward quorum; the system does not declare quorum. `sessions.declareQuorum` is seeded but has no route. Agenda advance requires `agenda.manage` (Secretariat). Board members seek recognition with **Raise a motion** (no text). A live dock alerts every floor surface until the presiding officer recognizes or dismisses, or the member cancels. The presiding officer or secretariat then records the spoken wording, attributed to the recognized member. Secretariat does not have `motions.create` except this on-behalf path.
 
@@ -103,7 +103,7 @@ Standard agenda template (when preparing an empty agenda) follows the Sanggunian
 
 Exact transitions from `app/States/Document/DocumentWorkflowStatus.php`. New uploads start at `submitted`. Transitions go through `GuardedStateTransition` (`POST /documents/{slug}/transition`).
 
-Proposed ordinances and resolutions follow the Sanggunian order (first reading, then committee, then second and third reading). Other document types keep the shorter register → refer path. The numbered ordinance/resolution register is a **separate manual record**: document IRP does not mint the citation.
+Proposed ordinances follow the Sanggunian order (first reading, then committee, then second and third reading). Proposed resolutions follow the same path through second reading, where the floor vote adopts or rejects them; they do not go to third reading. Other document types keep the shorter register → refer path. The numbered ordinance/resolution register is a **separate manual record**: document IRP does not mint the citation.
 
 ```mermaid
 stateDiagram-v2
@@ -116,8 +116,8 @@ stateDiagram-v2
   readingDeliberation --> committeeReferral: documents.refer
   committeeReferral --> committeeReview: documents.refer
   committeeReview --> committeeReport: reports.submit
-  committeeReview --> archive: documents.archive
   committeeReport --> agendaInclusion: agenda.manage
+  committeeReport --> archive: documents.archive
   readingDeliberation --> amendments: sessions.start
   amendments --> readingDeliberation: sessions.start
   readingDeliberation --> voting: sessions.start
@@ -156,18 +156,18 @@ Measure overlay:
 
 1. Initiation / preparation — author files the measure (`Documents/Create`) with the secretary checklist (written file, number/title, enacting clause, proposed effectivity, explanatory note for ordinances, signed author).
 2. Submission to secretary — `submitted` → `secretariat-review` → `registered`. Checklist is required before register.
-3. Agenda / first reading — `registered` → `agenda-inclusion` with `current_reading = 1` (ready pool; no sitting chosen yet). Secretariat attaches the measure under First Reading when preparing that session's agenda. Floor shows **title only**.
-4. Referral — after first reading, `reading-deliberation` → `committee-referral`. Unfavorable / file away is `committee-review` → `archive` (laid on the table; proponent notified).
-5. Committee reports out — `committee-report` plus the written `committee_reports` row.
-6. Committee on Rules — marks the measure ready for second (or third) reading: `agenda-inclusion` with `current_reading` 2 or 3. Secretariat attaches it when preparing the agenda.
-7. Second reading — full copies, amendments, debate, voting. Fail returns to reading 2; pass goes to `final-document`.
-8. Final form — secretariat prepares the form passed on second reading (`final-document`).
-9. Third reading — attach `current_reading = 3` on the agenda, then final vote.
+3. Agenda / first reading — `registered` → `agenda-inclusion` with `current_reading = 1` (ready pool; no sitting chosen yet). Secretariat attaches the measure under Reference of Business when preparing that session's agenda. Floor shows **title only**.
+4. Referral — after first reading, `reading-deliberation` → `committee-referral`. The committee meeting date on that first Refer is fixed. Blank: Second reading and Postpone appear on this sitting and on later postponements; the measure never joins a committee hearing, and Second reading closes the referral. Filled: the date is only a note, those buttons stay hidden, and the measure joins the next committee hearing whenever that agenda is prepared. Editing the date later does not switch the path.
+5. Committee reports out — secretariat files the `committee_reports` row on the document page (`reports.submit`). The measure moves to `committee-report` and is queued under Committee Hour / Reports on the next regular session. A `defer` result stays in committee.
+6. Committee Hour — while that Reports item is current, secretariat records the chair’s motion to adopt (no floor vote). Approve/amend sends the measure to this sitting’s Business for the Day as second reading (`agenda-inclusion`, `current_reading = 2`). Disapprove/no-action archives the measure.
+7. Second reading — full copies, amendments, debate, voting. For **resolutions**, this vote is final: pass → `approved`, fail → `rejected`. For **ordinances**, fail returns to reading 2; pass goes to `final-document`.
+8. Final form — ordinances only: secretariat prepares the form passed on second reading (`final-document`).
+9. Third reading — ordinances only: attach `current_reading = 3` on the agenda, then final vote.
 10. Passage — `approved` or `rejected`.
 11. Sealing — stamp on the current version (`POST /documents/{slug}/seal`). Ayes/nays stay in the votes table; the official book is the numbered ordinance/resolution register, entered by hand on Legislation after real-life (or floor) approval.
 12–16. LCE, SP, posting, and effectivity are typed dates on that ordinance (and on a resolution only when LCE/SP is required). They are not a progress bar and are not hard blocks.
 
-**As coded:** Reaching `public-publication` does **not** publish to the portal — that is the publication workflow below. Creating a `committee_referrals` row does not auto-advance these IRP states. First reading hides the PDF on the floor; the desk copy remains on the document record. Recording an ordinance does not require third reading and does not change the linked document.
+**As coded:** Reaching `public-publication` does **not** publish to the portal — that is the publication workflow below. Creating a `committee_referrals` row does not auto-advance these IRP states. First reading hides the PDF on the floor; the desk copy remains on the document record. Recording an ordinance does not require third reading and does not change the linked document. Second reading is not legal from `committee-report` until the Committee Hour motion is recorded.
 
 ---
 
@@ -185,7 +185,10 @@ flowchart LR
   end
 
   subgraph report [Report]
-    draft[draft] --> submitted[submitted]
+    draft[draft] --> chairReview[chair-review]
+    draft --> submitted[submitted]
+    chairReview --> submitted
+    submitted --> adopted[adopted]
   end
 
   reported -.-> draft
@@ -193,9 +196,9 @@ flowchart LR
 
 Referral create: `POST /referrals` (status `pending`). Update allows `pending`, `in-review`, `reported`, `returned`, `closed`. Setting `reported` sets `completed_at` when missing. Overdue is `due_at` in the past and `completed_at` null.
 
-Report create: `POST /reports` (`draft`). Submit: `POST /reports/{id}/submit` (`submitted`).
+Report create: `POST /reports` (`draft`). Secretariat files: `POST /reports/{id}/submit` from `draft` or `chair-review` (`submitted`), which queues the measure on the next regular session Reports heading. Floor adoption: `POST /sessions/{session}/agenda/{item}/committee-hour-motion` (`adopted`).
 
-**As coded:** `reports.adopt` is seeded and `adopted` exists on the factory, but there is no adopt route. Referral records do not auto-advance document IRP.
+**As coded:** Desk `reports.adopt` is denied. Filing is a secretariat permission. A `defer` submit does not mark the referral reported or advance IRP.
 
 ---
 

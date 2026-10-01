@@ -5,13 +5,20 @@ use App\Enums\UserRole;
 use App\Enums\VoteChoice;
 use App\Models\AgendaItem;
 use App\Models\Committee;
+use App\Models\CommitteeReferral;
+use App\Models\CommitteeReport;
 use App\Models\Document;
 use App\Models\LegislativeSession;
 use App\Models\User;
 use App\Models\Vote;
+use App\Services\Documents\CommitteeReferralService;
 use App\Services\Sessions\AgendaService;
+use App\Services\Workflow\GuardedStateTransition;
 use App\States\Document\AgendaInclusion;
 use App\States\Document\Approved;
+use App\States\Document\CommitteeReferral as CommitteeReferralState;
+use App\States\Document\CommitteeReport as CommitteeReportState;
+use App\States\Document\CommitteeReview;
 use App\States\Document\ReadingDeliberation;
 use App\States\Document\Rejected;
 use App\States\Session\Adjourned;
@@ -40,9 +47,12 @@ function calendarActor(UserRole $role, string $suffix): User
     ])->assignRole($role->value);
 }
 
-function calendarReadyMeasure(string $title, string $status = 'committee-report'): Document
-{
-    return Document::factory()->ofType(DocumentType::ProposedOrdinance)->create([
+function calendarReadyMeasure(
+    string $title,
+    string $status = 'agenda-inclusion',
+    DocumentType $type = DocumentType::ProposedOrdinance,
+): Document {
+    return Document::factory()->ofType($type)->create([
         'status' => $status,
         'current_reading' => $status === AgendaInclusion::$name ? 2 : null,
         'title' => $title,
@@ -428,6 +438,82 @@ it('forbids postpone to a board member', function (): void {
         ->assertForbidden();
 });
 
+it('lists a first-reading measure on the calendar from the start of the sitting', function (): void {
+    $secretariat = calendarActor(UserRole::Secretariat, 'docket-from-start');
+    $document = Document::factory()->ofType(DocumentType::ProposedOrdinance)->create([
+        'status' => AgendaInclusion::$name,
+        'current_reading' => 1,
+        'title' => 'An ordinance on the opening calendar',
+        'author_id' => $secretariat->getKey(),
+    ]);
+    $session = LegislativeSession::factory()->create([
+        'type' => 'regular',
+        'status' => InSession::$name,
+        'scheduled_start_at' => now()->addDay()->setTime(9, 0),
+        'actual_start_at' => now(),
+        'secretary_id' => $secretariat->getKey(),
+    ]);
+    $agenda = app(AgendaService::class);
+    $agenda->prepareStandardTemplate($session);
+    $firstReading = $session->agendaItems()
+        ->where('category', 'first-reading')
+        ->whereNull('document_id')
+        ->firstOrFail();
+    $agenda->bindDocuments($session, $firstReading, [$document->getKey()], $secretariat);
+
+    $this->actingAs($secretariat)
+        ->get(route('sessions.floor.secretariat', $session))
+        ->assertOk()
+        ->assertInertia(fn (Assert $page) => $page
+            ->component('Sessions/Floor/Secretariat')
+            ->has('calendar_docket')
+            ->where('calendar_docket', function ($docket) use ($document): bool {
+                $row = collect($docket)->firstWhere('document_id', $document->getKey());
+
+                return is_array($row)
+                    && $row['agenda_item_id'] === null
+                    && $row['can_second_reading'] === false
+                    && $row['can_postpone'] === false
+                    && $row['can_refer'] === true
+                    && $row['can_edit_referral'] === false
+                    && $row['title'] === $document->title;
+            })
+        );
+});
+
+it('offers calendar routing after referral even while first reading is still on the floor', function (): void {
+    $secretariat = calendarActor(UserRole::Secretariat, 'docket-referred-early');
+    $document = Document::factory()->ofType(DocumentType::ProposedOrdinance)->create([
+        'status' => AgendaInclusion::$name,
+        'current_reading' => 1,
+        'title' => 'An ordinance referred before first reading ends',
+        'author_id' => $secretariat->getKey(),
+    ]);
+    [$session, $item, $document, $committee] = calendarSittingAfterFirstReadingReferral($document, $secretariat);
+
+    $this->actingAs($secretariat)
+        ->post(route('sessions.floor.refer', $session), [
+            'agenda_item_id' => $item->getKey(),
+            'committee_id' => $committee->getKey(),
+        ])
+        ->assertRedirect();
+
+    $this->actingAs($secretariat)
+        ->get(route('sessions.floor.secretariat', $session))
+        ->assertOk()
+        ->assertInertia(fn (Assert $page) => $page
+            ->where('calendar_docket', function ($docket) use ($document): bool {
+                $row = collect($docket)->firstWhere('document_id', $document->getKey());
+
+                return is_array($row)
+                    && $row['can_second_reading'] === true
+                    && $row['can_postpone'] === true
+                    && $row['can_refer'] === false
+                    && $row['can_edit_referral'] === true;
+            })
+        );
+});
+
 it('lists a referred first-reading measure on the calendar after first reading is done', function (): void {
     $secretariat = calendarActor(UserRole::Secretariat, 'docket-referred');
     $document = Document::factory()->ofType(DocumentType::ProposedOrdinance)->create([
@@ -460,12 +546,14 @@ it('lists a referred first-reading measure on the calendar after first reading i
                     && $row['agenda_item_id'] === null
                     && $row['can_second_reading'] === true
                     && $row['can_postpone'] === true
-                    && $row['title'] === 'An ordinance after first reading';
+                    && $row['can_refer'] === false
+                    && $row['can_edit_referral'] === true
+                    && $row['title'] === $document->title;
             })
         );
 });
 
-it('does not list a first-reading measure that was never referred', function (): void {
+it('lists an unreferred first-reading measure without calendar routing actions', function (): void {
     $secretariat = calendarActor(UserRole::Secretariat, 'docket-unreferred');
     $document = Document::factory()->ofType(DocumentType::ProposedOrdinance)->create([
         'status' => AgendaInclusion::$name,
@@ -481,9 +569,213 @@ it('does not list a first-reading measure that was never referred', function ():
         ->assertOk()
         ->assertInertia(fn (Assert $page) => $page
             ->where('calendar_docket', function ($docket) use ($document): bool {
-                return collect($docket)->firstWhere('document_id', $document->getKey()) === null;
+                $row = collect($docket)->firstWhere('document_id', $document->getKey());
+
+                return is_array($row)
+                    && $row['can_second_reading'] === false
+                    && $row['can_postpone'] === false
+                    && $row['can_refer'] === true;
             })
         );
+});
+
+it('lists a committee hour report measure on the calendar docket', function (): void {
+    $secretariat = calendarActor(UserRole::Secretariat, 'docket-reports');
+    $committee = Committee::factory()->create();
+    $document = Document::factory()->ofType(DocumentType::ProposedOrdinance)->create([
+        'title' => 'Sample Ordinance',
+        'status' => CommitteeReview::$name,
+        'committee_id' => $committee->getKey(),
+        'current_reading' => 1,
+        'author_id' => $secretariat->getKey(),
+    ]);
+    $referral = CommitteeReferral::factory()->create([
+        'document_id' => $document->getKey(),
+        'committee_id' => $committee->getKey(),
+        'status' => 'reported',
+        'completed_at' => now()->subDay(),
+    ]);
+    CommitteeReport::factory()->create([
+        'committee_referral_id' => $referral->getKey(),
+        'committee_id' => $committee->getKey(),
+        'subject_document_id' => $document->getKey(),
+        'recommendation' => 'approve',
+        'status' => 'submitted',
+        'submitted_at' => now()->subDay(),
+    ]);
+    $document->update(['status' => CommitteeReportState::$name]);
+
+    $session = LegislativeSession::factory()->create([
+        'type' => 'regular',
+        'status' => InSession::$name,
+        'scheduled_start_at' => now()->setTime(9, 0),
+        'actual_start_at' => now()->subHour(),
+        'secretary_id' => $secretariat->getKey(),
+    ]);
+    $agenda = app(AgendaService::class);
+    $agenda->prepareStandardTemplate($session);
+    $heading = $session->agendaItems()
+        ->where('category', 'committee-reports')
+        ->whereNull('document_id')
+        ->firstOrFail();
+    $agenda->includeDocument($session, $document, $secretariat, null, $heading, authorize: false);
+
+    $this->actingAs($secretariat)
+        ->get(route('sessions.floor.secretariat', $session))
+        ->assertOk()
+        ->assertInertia(fn (Assert $page) => $page
+            ->component('Sessions/Floor/Secretariat')
+            ->where('calendar_docket', function ($docket) use ($document): bool {
+                $row = collect($docket)->firstWhere('document_id', $document->getKey());
+
+                return is_array($row)
+                    && $row['title'] === $document->title
+                    && $row['can_second_reading'] === true
+                    && $row['can_postpone'] === true;
+            })
+        );
+});
+
+it('lets the body send a committee hour report to second reading', function (): void {
+    $secretariat = calendarActor(UserRole::Secretariat, 'reports-second');
+    $committee = Committee::factory()->create();
+    $document = Document::factory()->ofType(DocumentType::ProposedOrdinance)->create([
+        'title' => 'Sample Ordinance',
+        'status' => CommitteeReview::$name,
+        'committee_id' => $committee->getKey(),
+        'current_reading' => 1,
+        'author_id' => $secretariat->getKey(),
+    ]);
+    $referral = CommitteeReferral::factory()->create([
+        'document_id' => $document->getKey(),
+        'committee_id' => $committee->getKey(),
+        'status' => 'reported',
+        'completed_at' => now()->subDay(),
+    ]);
+    CommitteeReport::factory()->create([
+        'committee_referral_id' => $referral->getKey(),
+        'committee_id' => $committee->getKey(),
+        'subject_document_id' => $document->getKey(),
+        'recommendation' => 'approve',
+        'status' => 'submitted',
+        'submitted_at' => now()->subDay(),
+    ]);
+    $document->update(['status' => CommitteeReportState::$name]);
+
+    $session = LegislativeSession::factory()->create([
+        'type' => 'regular',
+        'status' => InSession::$name,
+        'scheduled_start_at' => now()->setTime(9, 0),
+        'actual_start_at' => now()->subHour(),
+        'secretary_id' => $secretariat->getKey(),
+    ]);
+    $agenda = app(AgendaService::class);
+    $agenda->prepareStandardTemplate($session);
+    $heading = $session->agendaItems()
+        ->where('category', 'committee-reports')
+        ->whereNull('document_id')
+        ->firstOrFail();
+    $agenda->includeDocument($session, $document, $secretariat, null, $heading, authorize: false);
+    $item = $session->agendaItems()->where('document_id', $document->getKey())->firstOrFail();
+
+    $this->actingAs($secretariat)
+        ->get(route('sessions.show', $session))
+        ->assertOk()
+        ->assertInertia(fn (Assert $page) => $page
+            ->where('session.agenda_items', function ($items) use ($item): bool {
+                $row = collect($items)->firstWhere('id', $item->getKey());
+
+                return is_array($row) && $row['can_second_reading'] === true;
+            })
+            ->where('calendar_docket', function ($docket) use ($document): bool {
+                $row = collect($docket)->firstWhere('document_id', $document->getKey());
+
+                return is_array($row) && $row['can_second_reading'] === true;
+            })
+        );
+
+    $this->actingAs($secretariat)
+        ->post(route('sessions.agenda.second-reading', [$session, $item]))
+        ->assertRedirect()
+        ->assertSessionHas('success', 'sessions.calendar.second_reading_done');
+
+    $business = $session->agendaItems()->where('category', 'business-for-the-day')->whereNull('document_id')->firstOrFail();
+    $unassigned = $session->agendaItems()->where('category', 'unassigned-business')->whereNull('document_id')->firstOrFail();
+    $placed = $session->agendaItems()
+        ->where('document_id', $document->getKey())
+        ->where('reading_number', 2)
+        ->first();
+
+    expect($item->fresh()?->status)->toBe('completed')
+        ->and($item->fresh()?->parent_id)->not->toBe($business->getKey())
+        ->and($placed)->not->toBeNull()
+        ->and($placed?->getKey())->not->toBe($item->getKey())
+        ->and($placed?->parent_id)->toBe($business->getKey())
+        ->and($placed?->category)->toBe('second-reading')
+        ->and($placed?->item_number)->toBe('8.2.1')
+        ->and($placed?->position)->toBeGreaterThan($business->fresh()->position)
+        ->and($placed?->position)->toBeLessThan($unassigned->fresh()->position)
+        ->and($document->fresh()->status)->toBeInstanceOf(AgendaInclusion::class)
+        ->and($document->fresh()->current_reading)->toBe(2);
+});
+
+it('sends a committee hour report to second reading from the calendar list', function (): void {
+    $secretariat = calendarActor(UserRole::Secretariat, 'reports-docket-second');
+    $committee = Committee::factory()->create();
+    $document = Document::factory()->ofType(DocumentType::ProposedOrdinance)->create([
+        'title' => 'Sample Ordinance',
+        'status' => CommitteeReview::$name,
+        'committee_id' => $committee->getKey(),
+        'current_reading' => 1,
+        'author_id' => $secretariat->getKey(),
+    ]);
+    $referral = CommitteeReferral::factory()->create([
+        'document_id' => $document->getKey(),
+        'committee_id' => $committee->getKey(),
+        'status' => 'reported',
+        'completed_at' => now()->subDay(),
+    ]);
+    CommitteeReport::factory()->create([
+        'committee_referral_id' => $referral->getKey(),
+        'committee_id' => $committee->getKey(),
+        'subject_document_id' => $document->getKey(),
+        'recommendation' => 'approve',
+        'status' => 'submitted',
+        'submitted_at' => now()->subDay(),
+    ]);
+    $document->update(['status' => CommitteeReportState::$name]);
+
+    $session = LegislativeSession::factory()->create([
+        'type' => 'regular',
+        'status' => InSession::$name,
+        'scheduled_start_at' => now()->setTime(9, 0),
+        'actual_start_at' => now()->subHour(),
+        'secretary_id' => $secretariat->getKey(),
+    ]);
+    $agenda = app(AgendaService::class);
+    $agenda->prepareStandardTemplate($session);
+    $heading = $session->agendaItems()
+        ->where('category', 'committee-reports')
+        ->whereNull('document_id')
+        ->firstOrFail();
+    $agenda->includeDocument($session, $document, $secretariat, null, $heading, authorize: false);
+
+    $this->actingAs($secretariat)
+        ->post(route('sessions.calendar.second-reading', $session), [
+            'document_id' => $document->getKey(),
+        ])
+        ->assertRedirect()
+        ->assertSessionHas('success', 'sessions.calendar.second_reading_done');
+
+    $business = $session->agendaItems()->where('category', 'business-for-the-day')->whereNull('document_id')->firstOrFail();
+    $unassigned = $session->agendaItems()->where('category', 'unassigned-business')->whereNull('document_id')->firstOrFail();
+    $placed = $session->agendaItems()->where('document_id', $document->getKey())->where('reading_number', 2)->first();
+
+    expect($placed?->parent_id)->toBe($business->getKey())
+        ->and($placed?->item_number)->toBe('8.2.1')
+        ->and($placed?->position)->toBeGreaterThan($business->fresh()->position)
+        ->and($placed?->position)->toBeLessThan($unassigned->fresh()->position)
+        ->and($document->fresh()->current_reading)->toBe(2);
 });
 
 it('does not list a register measure that was not referred on this sitting', function (): void {
@@ -532,7 +824,49 @@ it('places a referred first-reading measure onto business for the day', function
         ->post(route('sessions.calendar.second-reading', $session), [
             'document_id' => $document->getKey(),
         ])
+        ->assertRedirect()
+        ->assertSessionHas('success', 'sessions.calendar.second_reading_done');
+
+    $heading = $session->agendaItems()->where('category', 'business-for-the-day')->whereNull('document_id')->firstOrFail();
+    $placed = $session->agendaItems()
+        ->where('document_id', $document->getKey())
+        ->where('parent_id', $heading->getKey())
+        ->first();
+    $referral = $document->referrals()->first();
+
+    expect($placed)->not->toBeNull()
+        ->and($placed?->category)->toBe('second-reading')
+        ->and($placed?->reading_number)->toBe(2)
+        ->and($item->fresh()->status)->toBe('completed')
+        ->and($document->fresh()->status)->toBeInstanceOf(AgendaInclusion::class)
+        ->and($document->fresh()->current_reading)->toBe(2)
+        ->and($referral?->status)->toBe('closed')
+        ->and($referral?->completed_at)->not->toBeNull();
+});
+
+it('places a referred first-reading measure on second reading without leaving first reading', function (): void {
+    $secretariat = calendarActor(UserRole::Secretariat, 'second-reading-during-first');
+    $document = Document::factory()->ofType(DocumentType::ProposedOrdinance)->create([
+        'status' => AgendaInclusion::$name,
+        'current_reading' => 1,
+        'title' => 'An ordinance calendared during first reading',
+        'author_id' => $secretariat->getKey(),
+    ]);
+    [$session, $item, $document, $committee] = calendarSittingAfterFirstReadingReferral($document, $secretariat);
+
+    $this->actingAs($secretariat)
+        ->post(route('sessions.floor.refer', $session), [
+            'agenda_item_id' => $item->getKey(),
+            'committee_id' => $committee->getKey(),
+        ])
         ->assertRedirect();
+
+    $this->actingAs($secretariat)
+        ->post(route('sessions.calendar.second-reading', $session), [
+            'document_id' => $document->getKey(),
+        ])
+        ->assertRedirect()
+        ->assertSessionHas('success', 'sessions.calendar.second_reading_done');
 
     $heading = $session->agendaItems()->where('category', 'business-for-the-day')->whereNull('document_id')->firstOrFail();
     $placed = $session->agendaItems()
@@ -541,11 +875,9 @@ it('places a referred first-reading measure onto business for the day', function
         ->first();
 
     expect($placed)->not->toBeNull()
-        ->and($placed?->category)->toBe('second-reading')
         ->and($placed?->reading_number)->toBe(2)
-        ->and($document->fresh()->status)->toBeInstanceOf(AgendaInclusion::class)
-        ->and($document->fresh()->current_reading)->toBe(2)
-        ->and($item->fresh()->status)->toBe('completed');
+        ->and($item->fresh()->status)->toBe('in-progress')
+        ->and($item->fresh()->parent_id)->not->toBe($heading->getKey());
 });
 
 it('postpones a referred first-reading measure onto the next sitting unfinished business', function (): void {
@@ -579,24 +911,226 @@ it('postpones a referred first-reading measure onto the next sitting unfinished 
         ->post(route('sessions.calendar.postpone', $session), [
             'document_id' => $document->getKey(),
         ])
-        ->assertRedirect();
+        ->assertRedirect()
+        ->assertSessionHas('success', 'sessions.calendar.postponed');
 
     $unfinished = $next->agendaItems()
         ->where('category', 'unfinished-business')
         ->where('document_id', $document->getKey())
-        ->first();
+        ->firstOrFail();
 
-    expect($unfinished)->not->toBeNull()
-        ->and($unfinished?->reading_number)->toBe(2)
-        ->and($document->fresh()->current_reading)->toBe(2);
+    expect($document->referrals()->first()?->completed_at)->toBeNull()
+        ->and($document->referrals()->first()?->hearing_waived)->toBeTrue();
+
+    $next->forceFill([
+        'status' => InSession::$name,
+        'actual_start_at' => now(),
+    ])->save();
+
+    $this->actingAs($secretariat)
+        ->get(route('sessions.floor.secretariat', $next))
+        ->assertOk()
+        ->assertInertia(fn (Assert $page) => $page
+            ->where('calendar_docket', function ($docket) use ($document): bool {
+                $row = collect($docket)->firstWhere('document_id', $document->getKey());
+
+                return is_array($row)
+                    && $row['can_second_reading'] === true
+                    && $row['can_postpone'] === true;
+            })
+        );
+
+    $this->actingAs($secretariat)
+        ->post(route('sessions.agenda.second-reading', [$next, $unfinished]))
+        ->assertRedirect()
+        ->assertSessionHas('success', 'sessions.calendar.second_reading_done');
+
+    expect($unfinished->fresh()->category)->toBe('second-reading')
+        ->and($document->referrals()->first()?->status)->toBe('closed');
+});
+
+it('returns a referred first-reading measure to the calendar instead of unassigned business on undo', function (): void {
+    $secretariat = calendarActor(UserRole::Secretariat, 'referred-undo');
+    $document = Document::factory()->ofType(DocumentType::ProposedOrdinance)->create([
+        'status' => AgendaInclusion::$name,
+        'current_reading' => 1,
+        'title' => 'An ordinance restored after postpone',
+        'author_id' => $secretariat->getKey(),
+    ]);
+    [$session, $item, $document, $committee] = calendarSittingAfterFirstReadingReferral($document, $secretariat);
+
+    $this->actingAs($secretariat)
+        ->post(route('sessions.floor.refer', $session), [
+            'agenda_item_id' => $item->getKey(),
+            'committee_id' => $committee->getKey(),
+        ])
+        ->assertRedirect();
+
+    completeFirstReadingSection($session, $item);
+
+    $next = LegislativeSession::factory()->create([
+        'type' => 'regular',
+        'status' => Draft::$name,
+        'scheduled_start_at' => now()->addDays(8)->setTime(9, 0),
+        'secretary_id' => $secretariat->getKey(),
+    ]);
+    app(AgendaService::class)->prepareStandardTemplate($next);
+
+    $this->actingAs($secretariat)
+        ->post(route('sessions.calendar.postpone', $session), [
+            'document_id' => $document->getKey(),
+        ])
+        ->assertRedirect()
+        ->assertSessionHas('success', 'sessions.calendar.postponed');
+
+    $parked = $session->agendaItems()
+        ->where('document_id', $document->getKey())
+        ->where('status', 'postponed')
+        ->firstOrFail();
+
+    $this->actingAs($secretariat)
+        ->post(route('sessions.agenda.undo-postpone', [$session, $parked]))
+        ->assertRedirect()
+        ->assertSessionHas('success', 'sessions.calendar.undo_done');
+
+    expect($session->agendaItems()->where('document_id', $document->getKey())->where('status', 'postponed')->exists())->toBeFalse()
+        ->and($next->agendaItems()->where('document_id', $document->getKey())->exists())->toBeFalse()
+        ->and($session->agendaItems()->where('document_id', $document->getKey())->where('category', 'unassigned-business')->exists())->toBeFalse();
+
+    $this->actingAs($secretariat)
+        ->get(route('sessions.floor.secretariat', $session))
+        ->assertOk()
+        ->assertInertia(fn (Assert $page) => $page
+            ->where('calendar_docket', function ($docket) use ($document): bool {
+                $row = collect($docket)->firstWhere('document_id', $document->getKey());
+
+                return is_array($row)
+                    && $row['can_second_reading'] === true
+                    && $row['can_postpone'] === true;
+            })
+        );
+});
+
+it('hides same-sitting buttons when the first referral has a meeting date', function (): void {
+    $secretariat = calendarActor(UserRole::Secretariat, 'dated-referral');
+    $document = Document::factory()->ofType(DocumentType::ProposedOrdinance)->create([
+        'status' => AgendaInclusion::$name,
+        'current_reading' => 1,
+        'title' => 'An ordinance sent to hearing',
+        'author_id' => $secretariat->getKey(),
+    ]);
+    [$session, $item, $document, $committee] = calendarSittingAfterFirstReadingReferral($document, $secretariat);
+    $meetingOn = now()->addDays(4)->toDateString();
+
+    $this->actingAs($secretariat)
+        ->post(route('sessions.floor.refer', $session), [
+            'agenda_item_id' => $item->getKey(),
+            'committee_id' => $committee->getKey(),
+            'meeting_on' => $meetingOn,
+        ])
+        ->assertRedirect();
+
+    completeFirstReadingSection($session, $item);
+
+    $this->actingAs($secretariat)
+        ->get(route('sessions.floor.secretariat', $session))
+        ->assertOk()
+        ->assertInertia(fn (Assert $page) => $page
+            ->where('calendar_docket', function ($docket) use ($document): bool {
+                $row = collect($docket)->firstWhere('document_id', $document->getKey());
+
+                return is_array($row)
+                    && $row['can_second_reading'] === false
+                    && $row['can_postpone'] === false;
+            })
+        );
+
+    $this->actingAs($secretariat)
+        ->put(route('documents.referral.update', $document), [
+            'committee_id' => $committee->getKey(),
+            'meeting_on' => null,
+        ])
+        ->assertRedirect();
+
+    expect($document->referrals()->first()?->hearing_waived)->toBeFalse()
+        ->and($document->referrals()->first()?->meeting_on)->toBeNull();
+
+    $hearing = LegislativeSession::factory()->create([
+        'type' => 'committee-hearing',
+        'status' => Draft::$name,
+        'scheduled_start_at' => now()->addDays(10)->setTime(9, 0),
+        'secretary_id' => $secretariat->getKey(),
+    ]);
+
+    $this->actingAs($secretariat)
+        ->post(route('sessions.prepare-agenda', $hearing))
+        ->assertRedirect();
+
+    expect($hearing->agendaItems()->where('document_id', $document->getKey())->exists())->toBeTrue();
+});
+
+it('keeps a blank-date referral off committee hearings after the date is filled in', function (): void {
+    $secretariat = calendarActor(UserRole::Secretariat, 'waived-referral');
+    $document = Document::factory()->ofType(DocumentType::ProposedOrdinance)->create([
+        'status' => AgendaInclusion::$name,
+        'current_reading' => 1,
+        'title' => 'An ordinance taken up today',
+        'author_id' => $secretariat->getKey(),
+    ]);
+    [$session, $item, $document, $committee] = calendarSittingAfterFirstReadingReferral($document, $secretariat);
+
+    $this->actingAs($secretariat)
+        ->post(route('sessions.floor.refer', $session), [
+            'agenda_item_id' => $item->getKey(),
+            'committee_id' => $committee->getKey(),
+        ])
+        ->assertRedirect();
+
+    $this->actingAs($secretariat)
+        ->put(route('documents.referral.update', $document), [
+            'committee_id' => $committee->getKey(),
+            'meeting_on' => now()->addDays(3)->toDateString(),
+        ])
+        ->assertRedirect();
+
+    expect($document->referrals()->first()?->hearing_waived)->toBeTrue();
+
+    $this->actingAs($secretariat)
+        ->get(route('sessions.floor.secretariat', $session))
+        ->assertOk()
+        ->assertInertia(fn (Assert $page) => $page
+            ->where('calendar_docket', function ($docket) use ($document): bool {
+                $row = collect($docket)->firstWhere('document_id', $document->getKey());
+
+                return is_array($row)
+                    && $row['can_second_reading'] === true
+                    && $row['can_postpone'] === true;
+            })
+        );
+
+    $hearing = LegislativeSession::factory()->create([
+        'type' => 'committee-hearing',
+        'status' => Draft::$name,
+        'scheduled_start_at' => now()->addDays(2)->setTime(9, 0),
+        'secretary_id' => $secretariat->getKey(),
+    ]);
+
+    $this->actingAs($secretariat)
+        ->post(route('sessions.prepare-agenda', $hearing))
+        ->assertRedirect();
+
+    expect($hearing->agendaItems()->where('document_id', $document->getKey())->exists())->toBeFalse();
 });
 
 /**
  * @return array{0: LegislativeSession, 1: AgendaItem, 2: Document}
  */
-function calendarSecondReadingOnFloor(User $secretariat, string $title): array
-{
-    $document = calendarReadyMeasure($title);
+function calendarSecondReadingOnFloor(
+    User $secretariat,
+    string $title,
+    DocumentType $type = DocumentType::ProposedOrdinance,
+): array {
+    $document = calendarReadyMeasure($title, AgendaInclusion::$name, $type);
     [$session, $item] = calendarSittingWithUnassigned($document, $secretariat, InSession::$name);
 
     test()->actingAs($secretariat)
@@ -854,47 +1388,7 @@ it('lists a passed second-reading measure once after it is placed on third readi
     $secretariat = calendarActor(UserRole::Secretariat, 'docket-one-ordinance');
     $presiding = calendarActor(UserRole::PresidingOfficer, 'docket-one-ordinance');
     $member = calendarActor(UserRole::BoardMember, 'docket-one-ordinance');
-    $document = Document::factory()->ofType(DocumentType::ProposedOrdinance)->create([
-        'status' => AgendaInclusion::$name,
-        'current_reading' => 1,
-        'title' => 'Sample Ordinance',
-        'author_id' => $secretariat->getKey(),
-    ]);
-    [$session, $firstReading, $document, $committee] = calendarSittingAfterFirstReadingReferral($document, $secretariat);
-
-    $this->actingAs($secretariat)
-        ->post(route('sessions.floor.refer', $session), [
-            'agenda_item_id' => $firstReading->getKey(),
-            'committee_id' => $committee->getKey(),
-        ])
-        ->assertRedirect();
-
-    completeFirstReadingSection($session, $firstReading);
-
-    $this->actingAs($secretariat)
-        ->post(route('sessions.calendar.second-reading', $session), [
-            'document_id' => $document->getKey(),
-        ])
-        ->assertRedirect();
-
-    $item = $session->agendaItems()
-        ->where('document_id', $document->getKey())
-        ->where('reading_number', 2)
-        ->firstOrFail();
-
-    $session->agendaItems()->update([
-        'status' => 'pending',
-        'started_at' => null,
-        'completed_at' => null,
-    ]);
-    $firstReading->update([
-        'status' => 'completed',
-        'completed_at' => now(),
-    ]);
-    $item->update([
-        'status' => 'in-progress',
-        'started_at' => now(),
-    ]);
+    [$session, $item, $document] = calendarSecondReadingOnFloor($secretariat, 'Sample Ordinance');
 
     holdFloorVote($session->fresh(), $item->fresh(), $presiding, $member, VoteChoice::Yes);
 
@@ -944,4 +1438,420 @@ it('offers proceed to third reading when a passing vote has not yet been placed'
                     && $row['placed_on_third_reading'] === false;
             })
         );
+});
+
+it('refers several unassigned measures to second reading in one request', function (): void {
+    $secretariat = calendarActor(UserRole::Secretariat, 'bulk-second');
+    $first = calendarReadyMeasure('An ordinance on bulk second reading one');
+    $second = calendarReadyMeasure('An ordinance on bulk second reading two');
+    [$session, $firstItem] = calendarSittingWithUnassigned($first, $secretariat);
+    $unassigned = $session->agendaItems()->where('category', 'unassigned-business')->whereNull('document_id')->firstOrFail();
+    app(AgendaService::class)->bindDocuments($session, $unassigned, [$second->getKey()], $secretariat);
+    $secondItem = $session->agendaItems()->where('document_id', $second->getKey())->firstOrFail();
+
+    $this->actingAs($secretariat)
+        ->post(route('sessions.calendar.bulk', $session), [
+            'action' => 'second-reading',
+            'items' => [
+                ['agenda_item_id' => $firstItem->getKey()],
+                ['agenda_item_id' => $secondItem->getKey()],
+            ],
+        ])
+        ->assertRedirect()
+        ->assertSessionHas('success', 'sessions.calendar.bulk_second_reading_done');
+
+    $heading = $session->agendaItems()->where('category', 'business-for-the-day')->whereNull('document_id')->firstOrFail();
+
+    expect($firstItem->fresh()->parent_id)->toBe($heading->getKey())
+        ->and($firstItem->fresh()->category)->toBe('second-reading')
+        ->and($firstItem->fresh()->reading_number)->toBe(2)
+        ->and($secondItem->fresh()->parent_id)->toBe($heading->getKey())
+        ->and($secondItem->fresh()->category)->toBe('second-reading');
+});
+
+it('postpones several live measures to unfinished business in one request', function (): void {
+    $secretariat = calendarActor(UserRole::Secretariat, 'bulk-postpone');
+    $first = calendarReadyMeasure('An ordinance on bulk postpone one');
+    $second = calendarReadyMeasure('An ordinance on bulk postpone two');
+    [$session, $firstItem] = calendarSittingWithUnassigned($first, $secretariat, InSession::$name);
+    $unassigned = $session->agendaItems()->where('category', 'unassigned-business')->whereNull('document_id')->firstOrFail();
+    app(AgendaService::class)->bindDocuments($session, $unassigned, [$second->getKey()], $secretariat);
+    $secondItem = $session->agendaItems()->where('document_id', $second->getKey())->firstOrFail();
+
+    $this->actingAs($secretariat)
+        ->post(route('sessions.calendar.bulk', $session), [
+            'action' => 'postpone',
+            'items' => [
+                ['agenda_item_id' => $firstItem->getKey()],
+                ['agenda_item_id' => $secondItem->getKey()],
+            ],
+        ])
+        ->assertRedirect()
+        ->assertSessionHas('success', 'sessions.calendar.bulk_postponed');
+
+    expect($firstItem->fresh()->status)->toBe('postponed')
+        ->and($secondItem->fresh()->status)->toBe('postponed');
+});
+
+it('refers several first-reading measures to second reading by document', function (): void {
+    $secretariat = calendarActor(UserRole::Secretariat, 'bulk-docs');
+    $first = Document::factory()->ofType(DocumentType::ProposedOrdinance)->create([
+        'status' => AgendaInclusion::$name,
+        'current_reading' => 1,
+        'title' => 'An ordinance bulk first reading one',
+        'author_id' => $secretariat->getKey(),
+    ]);
+    $second = Document::factory()->ofType(DocumentType::ProposedOrdinance)->create([
+        'status' => AgendaInclusion::$name,
+        'current_reading' => 1,
+        'title' => 'An ordinance bulk first reading two',
+        'author_id' => $secretariat->getKey(),
+    ]);
+    [$session, $firstItem, $first, $committee] = calendarSittingAfterFirstReadingReferral($first, $secretariat);
+    $heading = $session->agendaItems()->where('category', 'first-reading')->whereNull('document_id')->firstOrFail();
+    app(AgendaService::class)->bindDocuments($session, $heading, [$second->getKey()], $secretariat);
+    $secondItem = $session->agendaItems()->where('document_id', $second->getKey())->firstOrFail();
+
+    $transitions = app(GuardedStateTransition::class);
+    $referrals = app(CommitteeReferralService::class);
+
+    foreach ([$firstItem, $secondItem] as $item) {
+        $document = $item->document;
+        expect($document)->not->toBeNull();
+        $transitions->transition($document, ReadingDeliberation::class, $secretariat);
+        $document = $document->fresh() ?? $document;
+        $referrals->refer($document, [$committee->getKey()], $secretariat, $session, $item);
+        $transitions->transition($document, CommitteeReferralState::class, $secretariat);
+    }
+
+    completeFirstReadingSection($session, $firstItem);
+    $secondItem->update([
+        'status' => 'completed',
+        'completed_at' => now(),
+        'started_at' => $secondItem->started_at ?? now()->subMinute(),
+    ]);
+
+    $this->actingAs($secretariat)
+        ->post(route('sessions.calendar.bulk', $session), [
+            'action' => 'second-reading',
+            'items' => [
+                ['document_id' => $first->getKey()],
+                ['document_id' => $second->getKey()],
+            ],
+        ])
+        ->assertRedirect()
+        ->assertSessionHas('success', 'sessions.calendar.bulk_second_reading_done');
+
+    $business = $session->agendaItems()->where('category', 'business-for-the-day')->whereNull('document_id')->firstOrFail();
+
+    expect($session->agendaItems()->where('document_id', $first->getKey())->where('parent_id', $business->getKey())->exists())->toBeTrue()
+        ->and($session->agendaItems()->where('document_id', $second->getKey())->where('parent_id', $business->getKey())->exists())->toBeTrue()
+        ->and($first->referrals()->whereNull('completed_at')->exists())->toBeFalse()
+        ->and($second->referrals()->whereNull('completed_at')->exists())->toBeFalse();
+});
+
+it('rejects bulk second reading when a measure is scheduled for a committee hearing', function (): void {
+    $secretariat = calendarActor(UserRole::Secretariat, 'bulk-hearing-second');
+    $dated = Document::factory()->ofType(DocumentType::ProposedOrdinance)->create([
+        'status' => AgendaInclusion::$name,
+        'current_reading' => 1,
+        'title' => 'An ordinance scheduled for hearing',
+        'author_id' => $secretariat->getKey(),
+    ]);
+    $ready = calendarReadyMeasure('An ordinance ready beside a hearing');
+    [$session, $datedItem, $dated, $committee] = calendarSittingAfterFirstReadingReferral($dated, $secretariat);
+    $unassigned = $session->agendaItems()->where('category', 'unassigned-business')->whereNull('document_id')->firstOrFail();
+    app(AgendaService::class)->bindDocuments($session, $unassigned, [$ready->getKey()], $secretariat);
+    $readyItem = $session->agendaItems()->where('document_id', $ready->getKey())->firstOrFail();
+
+    $this->actingAs($secretariat)
+        ->post(route('sessions.floor.refer', $session), [
+            'agenda_item_id' => $datedItem->getKey(),
+            'committee_id' => $committee->getKey(),
+            'meeting_on' => now()->addDays(4)->toDateString(),
+        ])
+        ->assertRedirect();
+
+    $this->actingAs($secretariat)
+        ->post(route('sessions.calendar.bulk', $session), [
+            'action' => 'second-reading',
+            'items' => [
+                ['agenda_item_id' => $datedItem->getKey()],
+                ['agenda_item_id' => $readyItem->getKey()],
+            ],
+        ])
+        ->assertRedirect()
+        ->assertSessionHas('error', 'sessions.calendar.bulk_hearing_blocks_second_reading')
+        ->assertSessionHas('error_replacements', [
+            'number' => 1,
+            'title' => $dated->title,
+        ]);
+
+    expect($readyItem->fresh()->category)->toBe('unassigned-business')
+        ->and($dated->referrals()->whereNull('completed_at')->exists())->toBeTrue();
+});
+
+it('rejects bulk unfinished business when a later measure is scheduled for a committee hearing', function (): void {
+    $secretariat = calendarActor(UserRole::Secretariat, 'bulk-hearing-postpone');
+    $dated = Document::factory()->ofType(DocumentType::ProposedOrdinance)->create([
+        'status' => AgendaInclusion::$name,
+        'current_reading' => 1,
+        'title' => 'An ordinance waiting on a committee meeting',
+        'author_id' => $secretariat->getKey(),
+    ]);
+    $ready = calendarReadyMeasure('An ordinance ready to postpone');
+    [$session, $datedItem, , $committee] = calendarSittingAfterFirstReadingReferral($dated, $secretariat);
+    $unassigned = $session->agendaItems()->where('category', 'unassigned-business')->whereNull('document_id')->firstOrFail();
+    app(AgendaService::class)->bindDocuments($session, $unassigned, [$ready->getKey()], $secretariat);
+    $readyItem = $session->agendaItems()->where('document_id', $ready->getKey())->firstOrFail();
+
+    $this->actingAs($secretariat)
+        ->post(route('sessions.floor.refer', $session), [
+            'agenda_item_id' => $datedItem->getKey(),
+            'committee_id' => $committee->getKey(),
+            'meeting_on' => now()->addDays(5)->toDateString(),
+        ])
+        ->assertRedirect();
+
+    $this->actingAs($secretariat)
+        ->post(route('sessions.calendar.bulk', $session), [
+            'action' => 'postpone',
+            'items' => [
+                ['agenda_item_id' => $readyItem->getKey()],
+                ['document_id' => $dated->getKey()],
+            ],
+        ])
+        ->assertRedirect()
+        ->assertSessionHas('error', 'sessions.calendar.bulk_hearing_blocks_postpone')
+        ->assertSessionHas('error_replacements', [
+            'number' => 2,
+            'title' => $dated->title,
+        ]);
+
+    expect($readyItem->fresh()->status)->not->toBe('postponed');
+});
+
+it('still bulk-refers a same-sitting measure after a meeting date is added later', function (): void {
+    $secretariat = calendarActor(UserRole::Secretariat, 'bulk-hearing-waived');
+    $document = Document::factory()->ofType(DocumentType::ProposedOrdinance)->create([
+        'status' => AgendaInclusion::$name,
+        'current_reading' => 1,
+        'title' => 'An ordinance kept on this sitting',
+        'author_id' => $secretariat->getKey(),
+    ]);
+    [$session, $item, $document, $committee] = calendarSittingAfterFirstReadingReferral($document, $secretariat);
+
+    $this->actingAs($secretariat)
+        ->post(route('sessions.floor.refer', $session), [
+            'agenda_item_id' => $item->getKey(),
+            'committee_id' => $committee->getKey(),
+        ])
+        ->assertRedirect();
+
+    $this->actingAs($secretariat)
+        ->put(route('documents.referral.update', $document), [
+            'committee_id' => $committee->getKey(),
+            'meeting_on' => now()->addDays(3)->toDateString(),
+        ])
+        ->assertRedirect();
+
+    $this->actingAs($secretariat)
+        ->post(route('sessions.calendar.bulk', $session), [
+            'action' => 'second-reading',
+            'items' => [
+                ['document_id' => $document->getKey()],
+            ],
+        ])
+        ->assertRedirect()
+        ->assertSessionHas('success', 'sessions.calendar.bulk_second_reading_done');
+});
+
+it('rolls back a bulk referral when one measure cannot be routed', function (): void {
+    $secretariat = calendarActor(UserRole::Secretariat, 'bulk-rollback');
+    $ready = calendarReadyMeasure('An ordinance bulk rollback keep');
+    $other = calendarReadyMeasure('An ordinance bulk rollback foreign');
+    [$session, $readyItem] = calendarSittingWithUnassigned($ready, $secretariat);
+    [, $foreignItem] = calendarSittingWithUnassigned($other, $secretariat);
+
+    $this->actingAs($secretariat)
+        ->post(route('sessions.calendar.bulk', $session), [
+            'action' => 'second-reading',
+            'items' => [
+                ['agenda_item_id' => $readyItem->getKey()],
+                ['agenda_item_id' => $foreignItem->getKey()],
+            ],
+        ])
+        ->assertRedirect()
+        ->assertSessionHas('error', 'sessions.calendar.bulk_item_missing');
+
+    expect($readyItem->fresh()->category)->toBe('unassigned-business');
+});
+
+it('approves a resolution on a passing second-reading vote and does not calendar third reading', function (): void {
+    $secretariat = calendarActor(UserRole::Secretariat, 'resolution-second-pass');
+    $presiding = calendarActor(UserRole::PresidingOfficer, 'resolution-second-pass');
+    $member = calendarActor(UserRole::BoardMember, 'resolution-second-pass');
+    [$session, $item, $document] = calendarSecondReadingOnFloor(
+        $secretariat,
+        'A resolution that passed second reading',
+        DocumentType::ProposedResolution,
+    );
+
+    holdFloorVote($session, $item, $presiding, $member, VoteChoice::Yes);
+
+    expect($document->fresh()->status)->toBeInstanceOf(Approved::class)
+        ->and($session->agendaItems()->where('document_id', $document->getKey())->where('reading_number', 3)->exists())->toBeFalse();
+
+    $this->actingAs($secretariat)
+        ->get(route('sessions.floor.secretariat', $session))
+        ->assertOk()
+        ->assertInertia(fn (Assert $page) => $page
+            ->where('calendar_docket', function ($docket) use ($document): bool {
+                $row = collect($docket)->firstWhere('document_id', $document->getKey());
+
+                return $row === null
+                    || (is_array($row)
+                        && $row['can_third_reading'] === false
+                        && $row['placed_on_third_reading'] === false);
+            })
+        );
+});
+
+it('rejects a resolution on a failing second-reading vote', function (): void {
+    $secretariat = calendarActor(UserRole::Secretariat, 'resolution-second-fail');
+    $presiding = calendarActor(UserRole::PresidingOfficer, 'resolution-second-fail');
+    $member = calendarActor(UserRole::BoardMember, 'resolution-second-fail');
+    [$session, $item, $document] = calendarSecondReadingOnFloor(
+        $secretariat,
+        'A resolution that failed second reading',
+        DocumentType::ProposedResolution,
+    );
+
+    holdFloorVote($session, $item, $presiding, $member, VoteChoice::No);
+
+    expect($document->fresh()->status)->toBeInstanceOf(Rejected::class)
+        ->and($session->agendaItems()->where('document_id', $document->getKey())->where('reading_number', 3)->exists())->toBeFalse();
+});
+
+it('refuses to place a resolution on third reading from the calendar', function (): void {
+    $secretariat = calendarActor(UserRole::Secretariat, 'resolution-no-third');
+    $presiding = calendarActor(UserRole::PresidingOfficer, 'resolution-no-third');
+    $member = calendarActor(UserRole::BoardMember, 'resolution-no-third');
+    [$session, $item, $document] = calendarSecondReadingOnFloor(
+        $secretariat,
+        'A resolution that cannot go to third reading',
+        DocumentType::ProposedResolution,
+    );
+
+    holdFloorVote($session, $item, $presiding, $member, VoteChoice::Yes);
+
+    $this->actingAs($secretariat)
+        ->post(route('sessions.calendar.third-reading', $session), [
+            'document_id' => $document->getKey(),
+        ])
+        ->assertRedirect()
+        ->assertSessionHas('error', 'sessions.calendar.resolutions_skip_third_reading');
+
+    $this->actingAs($secretariat)
+        ->post(route('sessions.calendar.bulk', $session), [
+            'action' => 'third-reading',
+            'items' => [
+                ['document_id' => $document->getKey()],
+            ],
+        ])
+        ->assertRedirect()
+        ->assertSessionHas('error', 'sessions.calendar.resolutions_skip_third_reading');
+
+    expect($session->agendaItems()->where('document_id', $document->getKey())->where('reading_number', 3)->exists())->toBeFalse();
+});
+
+it('brings a resolution in line with a completed second-reading vote when the record is opened', function (): void {
+    $secretariat = calendarActor(UserRole::Secretariat, 'resolution-sync-show');
+    $member = calendarActor(UserRole::BoardMember, 'resolution-sync-show');
+    [$session, $item, $document] = calendarSecondReadingOnFloor(
+        $secretariat,
+        'A resolution already voted on second reading',
+        DocumentType::ProposedResolution,
+    );
+
+    $item->update([
+        'voting_round' => 1,
+        'voting_opened_at' => now()->subMinutes(5),
+        'voting_closed_at' => now()->subMinute(),
+    ]);
+
+    Vote::factory()->choice(VoteChoice::Yes)->create([
+        'session_id' => $session->getKey(),
+        'agenda_item_id' => $item->getKey(),
+        'user_id' => $member->getKey(),
+        'voting_round' => 1,
+    ]);
+
+    expect($document->fresh()->status)->toBeInstanceOf(AgendaInclusion::class);
+
+    $this->actingAs($secretariat)
+        ->get(route('documents.show', $document))
+        ->assertOk()
+        ->assertInertia(fn (Assert $page) => $page
+            ->component('Documents/Show')
+            ->where('document.status', Approved::$name)
+        );
+});
+
+it('still applies a third-reading vote to a resolution already on that heading', function (): void {
+    $secretariat = calendarActor(UserRole::Secretariat, 'resolution-grandfather-third');
+    $presiding = calendarActor(UserRole::PresidingOfficer, 'resolution-grandfather-third');
+    $member = calendarActor(UserRole::BoardMember, 'resolution-grandfather-third');
+    $document = Document::factory()->ofType(DocumentType::ProposedResolution)->create([
+        'status' => AgendaInclusion::$name,
+        'current_reading' => 3,
+        'title' => 'A resolution already on third reading',
+        'author_id' => $secretariat->getKey(),
+    ]);
+
+    $session = LegislativeSession::factory()->create([
+        'type' => 'regular',
+        'status' => InSession::$name,
+        'scheduled_start_at' => now()->addDay()->setTime(9, 0),
+        'actual_start_at' => now(),
+        'secretary_id' => $secretariat->getKey(),
+    ]);
+    $agenda = app(AgendaService::class);
+    $agenda->prepareStandardTemplate($session);
+
+    $heading = $session->agendaItems()
+        ->where('category', 'third-reading')
+        ->whereNull('document_id')
+        ->firstOrFail();
+
+    $item = $agenda->createItem($session, [
+        'title' => $document->title,
+        'document_id' => $document->getKey(),
+        'category' => 'third-reading',
+        'parent_id' => $heading->getKey(),
+        'reading_number' => 3,
+        'requires_vote' => true,
+        'status' => 'in-progress',
+    ]);
+    $item->update(['started_at' => now()]);
+
+    holdFloorVote($session->fresh(), $item->fresh(), $presiding, $member, VoteChoice::Yes);
+
+    expect($document->fresh()->status)->toBeInstanceOf(Approved::class);
+});
+
+it('forbids bulk calendar routing to a board member', function (): void {
+    $secretariat = calendarActor(UserRole::Secretariat, 'bulk-member-sec');
+    $member = calendarActor(UserRole::BoardMember, 'bulk-member');
+    $document = calendarReadyMeasure('An ordinance members cannot bulk route');
+    [$session, $item] = calendarSittingWithUnassigned($document, $secretariat, InSession::$name);
+
+    $this->actingAs($member)
+        ->post(route('sessions.calendar.bulk', $session), [
+            'action' => 'postpone',
+            'items' => [
+                ['agenda_item_id' => $item->getKey()],
+            ],
+        ])
+        ->assertForbidden();
 });
